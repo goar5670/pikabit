@@ -1,6 +1,12 @@
-use std::string::ToString;
 use rand::{distributions::Alphanumeric, Rng};
-use std::{fs, cmp};
+use std::{
+  fs,
+  cmp,
+  thread,
+  time,
+  string::ToString,
+  error::Error
+};
 use serde_bencode;
 
 use crate::tracker_protocol::http::{
@@ -87,23 +93,46 @@ impl Client {
   fn tracker_start_request(self: &Self) -> Request {
     Request::new(
       self.torrent.get_tracker_url(),
-      self.info_hash,
+      self.torrent.get_info_hash(),
       self.client_id.to_string(),
       self.port,
+      0,
+      0,
+      1024,
+      1,
+      0,
       Some(Event::Started),
+      None,
+      Some(50),
+      None,
+      None
     )
   }
 
   // todo: implement stop, resume functionality | priority: high
 
+  fn request_peers(self: &mut Self) -> Result<Vec<[u8; 6]>, Box<dyn Error>> {
+    let started_request: Request = self.tracker_start_request();
+    let mut iters = 0;
+    // todo: move this to config
+    let max_iters = 100;
+
+    while iters < max_iters {
+      let response: Response = serde_bencode::from_bytes(&started_request.get()).unwrap();
+      let peers = response.get_peers();
+
+      if peers.len() != 0 {
+        return Ok(peers);
+      }
+      iters += 1;
+      thread::sleep(time::Duration::from_secs(2));
+    }
+
+    panic!("Couldn't get peers from the tracker");
+  }
+
   pub fn run(self: &mut Self) {
-    // todo: implement stalling (repeat request until getting peers) | priority: high
-
-    let started_request = self.tracker_start_request();
-    let started_response: Response = serde_bencode::from_bytes(&started_request.get()).unwrap();
-
-    let peers = started_response.get_peers();
-
+    let peers = self.request_peers().unwrap();
     self.set_peers(&peers);
   }
 }

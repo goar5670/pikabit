@@ -41,24 +41,26 @@ pub mod http {
 
   impl Request {
     pub fn new(
-      base_url: String, info_hash: [u8; 20], client_id: String,
-      port: u16, event: Option<Event>
+      base_url: String, info_hash: [u8; 20], client_id: String, port: u16,
+      uploaded: u64, downloaded: u64, left: u64, compact: u8, no_peer_id: u8,
+      event: Option<Event>, ip: Option<Ipv4Addr>, numwant: Option<u32>,
+      key: Option<String>, tracker_id: Option<String>,
     ) -> Self {
       Self {
         base_url,
         info_hash,
         client_id,
         port,
-        uploaded: 0,
-        downloaded: 0,
-        left: 1024,
-        compact: 0,
-        no_peer_id: 0,
+        uploaded,
+        downloaded,
+        left,
+        compact,
+        no_peer_id,
         event,
-        ip: None,
-        numwant: Some(50),
-        key: None,
-        tracker_id: None,
+        ip,
+        numwant,
+        key,
+        tracker_id,
       }
     }
     pub fn get(self: &Self) -> Vec<u8> {
@@ -85,6 +87,7 @@ pub mod http {
     #[serde(rename = "tracker id")]
     tracker_id: Option<String>,
 
+    interval: u32,
     complete: u32,
     incomplete: u32,
     peers: ByteBuf,
