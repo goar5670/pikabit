@@ -1,3 +1,5 @@
+// todo: potentially move this to tracker_protocol | priority: med
+
 use serde_derive::{Deserialize, Serialize};
 use serde_bencode;
 use serde_bytes::ByteBuf;
@@ -55,8 +57,6 @@ pub struct Metadata {
   // #[serde(default)]
   // #[serde(rename = "created by")]
   // created_by: Option<String>,
-
-  // todo: check for the correctness of the metadta
 }
 
 impl Metadata {  
