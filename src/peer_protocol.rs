@@ -1,19 +1,22 @@
 // todo: add uTP (bep 29) | priority: low
 // todo: implement block pipelining (from bep 3) | priority: low
 
-use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
+use byteorder::{BigEndian, ByteOrder};
 use rand::{distributions::Alphanumeric, Rng};
 use std::{
     cmp,
-    thread,
-    time::Duration,
     collections::VecDeque,
-    io::{self, Read, Write},
-    net::{Ipv4Addr, SocketAddr, TcpStream},
-    sync::{Arc, Mutex, MutexGuard},
+    net::{Ipv4Addr, SocketAddr},
+    sync::Arc,
+};
+use tokio::{
+    io::{self, AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+    sync::{Mutex, MutexGuard},
+    time::{sleep, Duration},
 };
 
-use crate::metadata::{Metadata, Info};
+use crate::metadata::{Info, Metadata};
 
 #[derive(Debug, PartialEq)]
 pub struct PeerId {
@@ -72,18 +75,18 @@ impl ToString for PeerId {
 
 #[derive(Debug, PartialEq)]
 struct ConnectionState {
-    client_choking: bool,
+    client_choked: bool,
     client_interested: bool,
-    peer_choking: bool,
+    peer_choked: bool,
     peer_interested: bool,
 }
 
 impl ConnectionState {
     pub fn new() -> Self {
         Self {
-            client_choking: true,
+            client_choked: true,
             client_interested: false,
-            peer_choking: true,
+            peer_choked: true,
             peer_interested: false,
         }
     }
@@ -97,8 +100,13 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub fn connect(self: &Self) -> io::Result<TcpStream> {
-        TcpStream::connect(&self.address)
+    pub async fn connect(self: &Self) -> io::Result<TcpStream> {
+        println!("{:?}", self);
+        TcpStream::connect(&self.address).await
+    }
+
+    pub fn unchoke_me(self: &mut Self) {
+        self.state.client_choked = false;
     }
 }
 
@@ -115,107 +123,148 @@ impl From<[u8; 6]> for Peer {
     }
 }
 
-type Handler<T> = Option<Arc<Mutex<T>>>;
+pub struct SharedRef<T> {
+    inner: Option<Arc<Mutex<T>>>,
+}
 
-fn get_handle<T>(handler: &Handler<T>) -> MutexGuard<T> {
-    handler.as_ref().unwrap().lock().unwrap()
+impl<T> Clone for SharedRef<T> {
+    fn clone(self: &Self) -> Self {
+        Self {
+            inner: self.inner.as_ref().map(|mapref| Arc::clone(&mapref)),
+        }
+    }
+}
+
+impl<T> SharedRef<T> {
+    pub fn new(data: Option<T>) -> Self {
+        Self {
+            inner: data.map(|mapref| Arc::new(Mutex::new(mapref))),
+        }
+    }
+    pub async fn get_handle<'a>(self: &'a Self) -> MutexGuard<'a, T> {
+        self.inner.as_ref().unwrap().lock().await
+    }
 }
 
 #[derive(Debug)]
 struct BlockRequest(u32, u32, u32);
 
 impl BlockRequest {
-    pub fn send(self: &Self, handler: &Handler<TcpStream>) {
+    pub async fn send(self: &Self, handler: &SharedRef<TcpStream>) {
         let mut buf: Vec<u8> = vec![];
-        buf.write_u32::<BigEndian>(13).unwrap();
+        buf.write_u32(13).await.unwrap();
         buf.push(6);
-        buf.write_u32::<BigEndian>(self.0).unwrap();
-        buf.write_u32::<BigEndian>(self.1).unwrap();
-        buf.write_u32::<BigEndian>(self.2).unwrap();
+        buf.write_u32(self.0).await.unwrap();
+        buf.write_u32(self.1).await.unwrap();
+        buf.write_u32(self.2).await.unwrap();
 
-        let _ = get_handle(handler).write(&mut buf);
+        let _ = handler.get_handle().await.write(&mut buf).await;
         println!("sent request piece message, {:?}", self);
     }
 }
 
-pub struct PieceHandler<'a> {
-    requests: VecDeque<BlockRequest>,
-    info: &'a Info,
-    downloaded_pieces: Vec<bool>,
-    queue_cap: u32,
-    block_size: u32,
+#[derive(Clone)]
+struct Bitfield {
+    inner: Vec<u8>,
+    cnt_marked: u32,
+    length: u32,
 }
 
-impl<'a> PieceHandler<'a> {
-    fn new(info: &'a Info) -> Self {
+impl Bitfield {
+    pub fn new(size: u32) -> Self {
         Self {
-            requests: VecDeque::new(),
-            info,
-            downloaded_pieces: vec![false; info.get_num_pieces() as usize],
-            queue_cap: 100,
-            block_size: 16 * 1024,
+            length: size,
+            cnt_marked: 0,
+            inner: vec![0; ((size + 7) / 8) as usize],
         }
     }
 
-    pub fn request_piece(self: &mut Self, handler: &Handler<TcpStream>, piece_index: u32) {
-        let mut cur_offset: u32 = 0;
-        let piece_len = self.info.get_piece_len(piece_index);
-        println!("piece length: {}", piece_len);
-        while cur_offset != piece_len {
-            let block_size = cmp::min(self.block_size, piece_len - cur_offset);
-            let request = BlockRequest(piece_index, cur_offset, block_size);
-            request.send(handler);
-            cur_offset += block_size;
-            thread::sleep(Duration::from_millis(10));
+    fn _get_bit_index(index: u32) -> (usize, u8) {
+        ((index / 8) as usize, (index % 8) as u8)
+    }
+
+    fn _check_offset(byte: u8, offset: u8) -> bool {
+        (byte & (1 << offset)) == 1
+    }
+
+    pub fn len(self: &Self) -> u32 {
+        self.length
+    }
+
+    pub fn rem(self: &Self) -> u32 {
+        self.length - self.cnt_marked
+    }
+
+    pub fn get(self: &Self, index: u32) -> bool {
+        if index >= self.length {
+            panic!("Requested index is out of bounds");
         }
+
+        let (byte_index, offset) = Self::_get_bit_index(index);
+        Self::_check_offset(*self.inner.get(byte_index).unwrap(), offset)
+    }
+
+    pub fn set(self: &mut Self, index: u32) {
+        if index >= self.length {
+            panic!("Requested index is out of bounds");
+        }
+
+        let (byte_index, offset) = Self::_get_bit_index(index);
+        let byte = self.inner.get_mut(byte_index).unwrap();
+        if *byte & (1 << offset) == 1 {
+            return;
+        }
+
+        println!("before set {}", byte);
+        *byte &= 1 << offset;
+        self.cnt_marked += 1;
+        println!("after set {}", self.inner.get(byte_index).unwrap());
+    }
+}
+
+impl From<(&[u8], u32)> for Bitfield {
+    fn from((buf, size): (&[u8], u32)) -> Self {
+        let mut bitfield = Bitfield::new(size);
+        bitfield.inner = buf.to_vec();
+
+        for i in buf {
+            bitfield.cnt_marked += i.count_ones();
+        }
+
+        bitfield
     }
 }
 
 mod message_handler {
-    use super::{get_handle, Handler, PieceHandler};
+    use super::*;
     use crate::constants::message_ids::*;
-    use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
-    use std::{
-        io::{Read, Write},
-        net::TcpStream,
-        thread,
-        time::Duration,
-    };
 
-    async fn _send(
-        handler: &Handler<TcpStream>,
-        length: u32,
-        id: Option<u8>,
-        // payload: Option<&mut Vec<u8>>,
-    ) {
+    async fn _send(stream_ref: &SharedRef<TcpStream>, length: u32, id: Option<u8>) {
         let mut buf: Vec<u8> = vec![];
-        buf.write_u32::<BigEndian>(length).unwrap();
+        buf.write_u32(length).await.unwrap();
         if length != 0 {
             let message_id = id.unwrap();
             buf.push(message_id);
         }
 
-        let _ = get_handle(handler).write(&mut buf);
+        let _ = stream_ref.get_handle().await.write(&mut buf).await;
         println!("sent message, id {:?}, buffer: {:?}", id, buf);
     }
 
-    fn _recv_len(handler: &Handler<TcpStream>) -> u32 {
+    async fn _recv_len(stream_ref: &SharedRef<TcpStream>) -> u32 {
         let mut buf = [0u8; 4];
-        let _ = get_handle(handler).read_exact(&mut buf).unwrap();
+        let _ = stream_ref.get_handle().await.read_exact(&mut buf).await;
         BigEndian::read_u32(&buf)
     }
 
-    fn _recv(handler: &Handler<TcpStream>, buf: &mut [u8], n: u32) -> Result<(), std::io::Error> {
-        let mut stream = get_handle(handler);
-        let _ = match stream.read_exact(buf) {
-            Err(e) => {
-                eprintln!("failed to read from socket; err = {:?}", e);
-                return Err(e);
-            }
-            _ => 0,
-        };
+    async fn _recv(
+        stream_ref: &SharedRef<TcpStream>,
+        buf: &mut [u8],
+        n: u32,
+    ) -> Result<(), std::io::Error> {
+        let _ = stream_ref.get_handle().await.read_exact(buf).await;
 
-        if n < 9 {
+        if buf[0] != PIECE {
             println!("recieved message, len: {} {:?}", n, buf.to_vec());
         } else {
             println!(
@@ -231,59 +280,147 @@ mod message_handler {
     }
 
     pub async fn send(
-        handler: Handler<TcpStream>,
+        stream_ref: SharedRef<TcpStream>,
         length: u32,
         id: Option<u8>,
         // payload: Option<&mut Vec<u8>>,
     ) {
-        _send(&handler, length, id).await;
+        _send(&stream_ref, length, id).await;
     }
 
-    pub async fn recv_loop<'a>(handler: Handler<TcpStream>, piece_handler: &mut PieceHandler<'a>) {
+    pub async fn recv_loop<'a>(
+        stream_ref: SharedRef<TcpStream>,
+        peer_ref: SharedRef<Peer>,
+        piece_handler: Arc<PieceHandler>,
+    ) {
         loop {
-            let n: u32 = _recv_len(&handler);
+            let n: u32 = _recv_len(&stream_ref).await;
             if n == 0 {
                 continue;
             }
-            
+
             let mut buf: Vec<u8> = vec![0; n as usize];
-            let _ = _recv(&handler, &mut buf, n).unwrap();
+            let _ = _recv(&stream_ref, &mut buf, n).await.unwrap();
 
             let message_id = buf[0];
-            if message_id == HAVE {
-                piece_handler.request_piece(&handler, BigEndian::read_u32(&buf[1..]));
+            if message_id == UNCHOKE {
+                peer_ref.get_handle().await.unchoke_me();
+            } else if message_id == HAVE {
+                piece_handler
+                    .queue_piece(BigEndian::read_u32(&buf[1..]))
+                    .await;
+            } else if message_id == BITFIELD {
+                let piece_handler = Arc::clone(&piece_handler);
+                let bitfield = Bitfield::from((&buf[1..], piece_handler.info.num_pieces()));
+                tokio::spawn(async move {
+                    for i in 0..bitfield.len() {
+                        if bitfield.get(i) == true {
+                            piece_handler.queue_piece(i).await;
+                            sleep(Duration::from_millis(2)).await;
+                        }
+                    }
+                });
+            } else if message_id == PIECE {
+                *piece_handler.num_requests.get_handle().await -= 1;
+                // let piece_index = BigEndian::read_u32(&buf[1..5]);
+                // let piece_bitfield = piece_handler.downloaded_blocks.get_mut(piece_index);
             }
 
-            thread::sleep(Duration::from_millis(1));
+            sleep(Duration::from_millis(1)).await;
         }
     }
 
-    pub async fn keep_alive(handler: Handler<TcpStream>) {
+    pub async fn keep_alive(stream_ref: SharedRef<TcpStream>) {
         loop {
-            _send(&handler, 0, None).await;
-            thread::sleep(Duration::from_secs(60));
+            _send(&stream_ref, 0, None).await;
+            sleep(Duration::from_secs(60)).await;
+        }
+    }
+}
+
+pub struct PieceHandler {
+    requests_queue: SharedRef<VecDeque<BlockRequest>>,
+    info: Arc<Info>,
+    downloaded_pieces: Bitfield,
+    // downloaded_blocks: Vec<Bitfield>,
+    // requested_pieces: Bitfield,
+    num_requests: SharedRef<u32>,
+    requests_cap: u32,
+    block_size: u32,
+}
+
+impl PieceHandler {
+    fn new(metadata: &Metadata) -> Self {
+        let info = Arc::clone(&metadata.info);
+        let num_pieces = info.num_pieces();
+        let block_size = 16 * 1024;
+        // let num_blocks = info.num_blocks(0, block_size);
+        println!("number of pieces: {}", num_pieces);
+        Self {
+            requests_queue: SharedRef::new(Some(VecDeque::new())),
+            info,
+            downloaded_pieces: Bitfield::new(num_pieces),
+            // downloaded_blocks: vec![Bitfield::new(num_blocks); num_pieces as usize],
+            // requested_pieces: Bitfield::new(num_pieces),
+            num_requests: SharedRef::new(Some(0)),
+            requests_cap: 10,
+            block_size,
+        }
+    }
+
+    async fn _full(self: &Self) -> bool {
+        return *self.num_requests.get_handle().await > self.requests_cap
+    }
+
+    pub async fn queue_piece(self: &Self, piece_index: u32) {
+        // println!("{}", piece_index);
+        let mut cur_offset: u32 = 0;
+        let piece_len = self.info.piece_len(piece_index);
+        // println!("piece length: {}", piece_len);
+        while cur_offset != piece_len {
+            let block_size = cmp::min(self.block_size, piece_len - cur_offset);
+            let request = BlockRequest(piece_index, cur_offset, block_size);
+            self.requests_queue.get_handle().await.push_back(request);
+            cur_offset += block_size;
+        }
+    }
+
+    pub async fn request_loop(self: &Self, stream_ref: SharedRef<TcpStream>, peer_ref: SharedRef<Peer>) {
+        while self.downloaded_pieces.rem() > 0 {
+            if self._full().await || peer_ref.get_handle().await.state.client_choked {
+                // println!("{}", cnt);
+                // println!("{}", peer_ref.get_handle().await.state.client_choked);
+                sleep(Duration::from_millis(2)).await;
+            } else {
+                let mut q = self.requests_queue.get_handle().await;
+                // print!("got here");
+                if q.len() > 0 {
+                    // print!("and there");
+                    q.front().unwrap().send(&stream_ref).await;
+                    q.pop_front();
+                    *self.num_requests.get_handle().await += 1;
+                }
+                // println!("");
+            }
         }
     }
 }
 
 pub struct PeerHandler {
-    peer: Peer,
-    stream: Handler<TcpStream>,
+    peer: SharedRef<Peer>,
+    stream: SharedRef<TcpStream>,
 }
 
 impl PeerHandler {
     pub fn new(peer: Peer) -> Self {
-        Self { peer, stream: None }
+        Self {
+            peer: SharedRef::new(Some(peer)),
+            stream: SharedRef::new(None),
+        }
     }
 
-    fn get_stream(self: &Self) -> Handler<TcpStream> {
-        self.stream
-            .as_ref()
-            .map(|stream_ref| Arc::clone(stream_ref))
-    }
-
-    fn connect(self: &mut Self) {
-        self.stream = Some(Arc::new(Mutex::new(self.peer.connect().unwrap())))
+    async fn connect(self: &mut Self) {
+        self.stream = SharedRef::new(Some(self.peer.get_handle().await.connect().await.unwrap()));
     }
 
     fn get_handshake_payload(self: &Self, info_hash: &[u8; 20], client_id: &PeerId) -> Vec<u8> {
@@ -299,15 +436,17 @@ impl PeerHandler {
         payload
     }
 
-    fn handshake(self: &Self, payload: Vec<u8>) -> [u8; 20] {
-        let handler = self.get_stream().unwrap();
-        let mut stream = handler.lock().unwrap();
-        let _ = stream.write(&payload);
-        let mut buff = [0u8; 128];
-        let buff_len = stream.read(&mut buff).unwrap();
+    async fn handshake(self: &Self, payload: Vec<u8>) -> [u8; 20] {
+        let stream_ref = self.stream.clone();
+        let mut stream = stream_ref.get_handle().await;
+        let _ = stream.write(&payload).await;
 
-        debug_assert_eq!(buff_len, payload.len());
-        debug_assert_eq!(buff[..buff_len - 20], payload[..buff_len - 20]);
+        let mut buff = [0u8; 128];
+        let buff_len = stream.read(&mut buff).await.unwrap();
+
+        println!("buff_len = {},{:?}", buff_len, &buff[payload.len() - 20..]);
+        // debug_assert_eq!(buff[..payload.len() - 20], payload[..payload.len() - 20]);
+        // debug_assert_eq!(buff_len, payload.len());
 
         let mut ret = [0u8; 20];
         ret.copy_from_slice(&buff[buff_len - 20..buff_len]);
@@ -315,26 +454,32 @@ impl PeerHandler {
         ret
     }
 
-    pub async fn run<'a>(self: &mut Self, metadata: &'a Metadata, client_id: &PeerId) {
-        self.connect();
+    pub async fn run(self: &mut Self, metadata: &Metadata, client_id: &PeerId) {
+        self.connect().await;
         let info_hash = &metadata.get_info_hash();
-        self.peer.id = Some(PeerId::from(
+        self.peer.get_handle().await.id = Some(PeerId::from(
             self.handshake(self.get_handshake_payload(info_hash, client_id))
+                .await
                 .as_ref(),
         ));
         println!(
             "peer id: {}",
-            String::from_utf8(self.peer.id.as_ref().unwrap().to_vec()).unwrap()
+            String::from_utf8(self.peer.get_handle().await.id.as_ref().unwrap().to_vec()).unwrap()
         );
 
-        let mut piece_handler: PieceHandler<'a> =
-            PieceHandler::new(&metadata.info);
+        let piece_handler: Arc<PieceHandler> = Arc::new(PieceHandler::new(&metadata));
 
-        message_handler::send(self.get_stream(), 1, Some(2)).await;
-        let handle = tokio::spawn(message_handler::keep_alive(self.get_stream()));
-        message_handler::recv_loop(self.get_stream(), &mut piece_handler).await;
+        message_handler::send(self.stream.clone(), 1, Some(2)).await;
+        let keep_alive_handle = tokio::spawn(message_handler::keep_alive(self.stream.clone()));
+        let recv_loop_handle = tokio::spawn(message_handler::recv_loop(
+            self.stream.clone(),
+            self.peer.clone(),
+            Arc::clone(&piece_handler),
+        ));
+        piece_handler.request_loop(self.stream.clone(), self.peer.clone()).await;
 
-        handle.await.unwrap();
+        keep_alive_handle.await.unwrap();
+        recv_loop_handle.await.unwrap();
     }
 }
 

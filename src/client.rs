@@ -9,6 +9,7 @@ pub struct Client {
     peer_id: PeerId,
     torrent: Metadata,
     port: u16,
+    left: u64,
 }
 
 impl Client {
@@ -17,6 +18,7 @@ impl Client {
         let torrent: Metadata = serde_bencode::from_bytes(&file).unwrap();
 
         let default_port = 6881;
+        let left = torrent.info.length();
 
         Self {
             peer_id: PeerId::new(),
@@ -25,6 +27,7 @@ impl Client {
                 Some(p) => p,
                 None => default_port,
             },
+            left,
         }
     }
 
@@ -36,7 +39,7 @@ impl Client {
             self.port,
             0,
             0,
-            1024,
+            self.left,
             1,
             0,
             Some(Event::Started),
@@ -75,8 +78,9 @@ impl Client {
 
     pub async fn run(self: &mut Self) {
         let peers = self.request_peers().await.unwrap();
-        let mut peer_handler = PeerHandler::new(Peer::from(peers[0]));
+        println!("number of peers {}", peers.len());
 
+        let mut peer_handler = PeerHandler::new(Peer::from(peers[0]));
         peer_handler.run(&self.torrent, &self.peer_id).await;
     }
 }

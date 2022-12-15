@@ -4,6 +4,7 @@ use serde_bencode;
 use serde_bytes::ByteBuf;
 use serde_derive::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use std::sync::Arc;
 
 // #[derive(Debug, Deserialize)]
 // struct Node(String, i64);
@@ -26,7 +27,7 @@ pub struct Info {
     #[serde(default)]
     md5sum: Option<String>,
     #[serde(default)]
-    length: Option<u32>,
+    length: Option<u64>,
     #[serde(default)]
     files: Option<Vec<File>>,
     #[serde(default)]
@@ -39,35 +40,39 @@ pub struct Info {
 }
 
 impl Info {
-    fn _get_last_piece_len(self: &Self) -> u32 {
-        let ret = self.length.unwrap() % self.piece_length;
+    fn _last_piece_len(self: &Self) -> u32 {
+        let ret = self.length.unwrap() % self.piece_length as u64;
         if ret == 0 {
             return self.piece_length;
         }
-        ret
+        ret as u32
     }
 
-    pub fn get_piece_len(self: &Self, piece_index: u32) -> u32 {
-        if piece_index == self.get_num_pieces() - 1 {
-            return self._get_last_piece_len();
+    pub fn piece_len(self: &Self, piece_index: u32) -> u32 {
+        if piece_index == self.num_pieces() - 1 {
+            return self._last_piece_len();
         }
         self.piece_length
     }
 
-    pub fn get_length(self: &Self) -> u32 {
+    pub fn length(self: &Self) -> u64 {
         self.length.unwrap()
     }
 
-    pub fn get_num_pieces(self: &Self) -> u32 {
+    pub fn num_pieces(self: &Self) -> u32 {
         // debug_assert_eq!(self.info.length.unwrap() % self.info.piece_length, 0);
-        (self.length.unwrap() + self.piece_length - 1) / self.piece_length
+        ((self.length.unwrap() + self.piece_length as u64 - 1) / self.piece_length as u64) as u32
+    }
+
+    pub fn num_blocks(self: &Self, piece_index: u32, block_size: u32) -> u32 {
+        ((self.piece_len(piece_index) + block_size - 1) / block_size) as u32
     }
 
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Metadata {
-    pub info: Info,
+    pub info: Arc<Info>,
     announce: String,
     // #[serde(default)]
     // nodes: Option<Vec<Node>>,
@@ -123,14 +128,14 @@ mod test {
 
     #[test]
     fn info_hash() {
-        const TORRENT_FILENAME: &'static str = constants::torrents::UBUNTU22;
+        const TORRENT_FILENAME: &'static str = constants::torrents::FREE_BSD;
         let file: Vec<u8> = fs::read(TORRENT_FILENAME).unwrap();
         let torrent: Metadata = serde_bencode::from_bytes(&file).unwrap();
 
         let info_hash = torrent.get_info_hash();
         debug_assert_eq!(
             hex::encode(info_hash),
-            constants::torrents::UBUNTU22_INFO_HASH
+            constants::torrents::FREE_BSD_INFO_HASH
         );
         debug_assert_eq!(info_hash.len(), 20);
     }
