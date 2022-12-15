@@ -16,7 +16,7 @@ async fn _send(stream_ref: &SharedRef<TcpStream>, length: u32, id: Option<u8>) {
 
 async fn _recv_len(stream_ref: &SharedRef<TcpStream>) -> u32 {
     let mut buf = [0u8; 4];
-    let _ = stream_ref.get_handle().await.read_exact(&mut buf).await;
+    let _ = stream_ref.get_handle().await.try_read(&mut buf).unwrap_or_default();
     BigEndian::read_u32(&buf)
 }
 
