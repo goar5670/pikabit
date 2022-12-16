@@ -2,6 +2,7 @@
 pub struct Bitfield {
     inner: Vec<u8>,
     cnt_marked: u32,
+    cur: u32,
     length: u32,
 }
 
@@ -9,6 +10,7 @@ impl Bitfield {
     pub fn new(size: u32) -> Self {
         Self {
             length: size,
+            cur: 0,
             cnt_marked: 0,
             inner: vec![0; ((size + 7) / 8) as usize],
         }
@@ -30,13 +32,13 @@ impl Bitfield {
         self.length - self.cnt_marked
     }
 
-    pub fn get(self: &Self, index: u32) -> bool {
+    pub fn get(self: &Self, index: u32) -> Option<bool> {
         if index >= self.length {
-            panic!("Requested index is out of bounds");
+            return None;
         }
 
         let (byte_index, offset) = Self::_get_bit_index(index);
-        Self::_check_offset(*self.inner.get(byte_index).unwrap(), offset)
+        Some(Self::_check_offset(*self.inner.get(byte_index).unwrap(), offset))
     }
 
     pub fn set(self: &mut Self, index: u32) -> u32 {
@@ -66,5 +68,16 @@ impl From<(&[u8], u32)> for Bitfield {
         bitfield.cnt_marked = buf.iter().map(|i| i.count_ones()).sum();
 
         bitfield
+    }
+}
+
+impl Iterator for Bitfield {
+    type Item = bool;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ret = self.get(self.cur);
+        self.cur += 1;
+
+        ret
     }
 }

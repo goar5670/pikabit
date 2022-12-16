@@ -5,22 +5,22 @@ use byteorder::{BigEndian, ByteOrder};
 use rand::{distributions::Alphanumeric, Rng};
 use std::{
     cmp,
-    collections::VecDeque,
     net::{Ipv4Addr, SocketAddr},
     sync::Arc,
 };
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::{Mutex, MutexGuard},
-    time::{sleep, Duration},
 };
 
-use crate::metadata::{Info, Metadata};
-use message_handler::PieceHandler;
+use crate::metadata::Metadata;
+use piece::PieceHandler;
+use shared_data::SharedRef;
 
+mod shared_data;
 mod bitfield;
-mod message_handler;
+mod message;
+mod piece;
 
 #[derive(Debug, PartialEq)]
 pub struct PeerId {
@@ -129,29 +129,6 @@ impl From<[u8; 6]> for Peer {
     }
 }
 
-pub struct SharedRef<T> {
-    inner: Option<Arc<Mutex<T>>>,
-}
-
-impl<T> Clone for SharedRef<T> {
-    fn clone(self: &Self) -> Self {
-        Self {
-            inner: self.inner.as_ref().map(|mapref| Arc::clone(&mapref)),
-        }
-    }
-}
-
-impl<T> SharedRef<T> {
-    pub fn new(data: Option<T>) -> Self {
-        Self {
-            inner: data.map(|mapref| Arc::new(Mutex::new(mapref))),
-        }
-    }
-    pub async fn get_handle<'a>(self: &'a Self) -> MutexGuard<'a, T> {
-        self.inner.as_ref().unwrap().lock().await
-    }
-}
-
 pub struct PeerHandler {
     peer: SharedRef<Peer>,
     stream: SharedRef<TcpStream>,
@@ -212,9 +189,9 @@ impl PeerHandler {
 
         let piece_handler: Arc<PieceHandler> = Arc::new(PieceHandler::new(&metadata));
 
-        message_handler::send(self.stream.clone(), 1, Some(2)).await;
-        let keep_alive_handle = tokio::spawn(message_handler::keep_alive(self.stream.clone()));
-        let recv_loop_handle = tokio::spawn(message_handler::recv_loop(
+        message::send(self.stream.clone(), 1, Some(2)).await;
+        let keep_alive_handle = tokio::spawn(message::keep_alive(self.stream.clone()));
+        let recv_loop_handle = tokio::spawn(message::recv_loop(
             self.stream.clone(),
             self.peer.clone(),
             Arc::clone(&piece_handler),

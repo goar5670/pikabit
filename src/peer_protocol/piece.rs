@@ -1,115 +1,19 @@
-use sha1::{Digest, Sha1};
-use std::collections::HashMap;
+use sha1::{Sha1, Digest};
+use std::{
+    cmp,
+    collections::{VecDeque, HashMap},
+    sync::Arc,
+};
+use tokio::{
+    io::AsyncWriteExt,
+    net::TcpStream,
+    time::{sleep, Duration},
+};
 
-use super::{bitfield::*, *};
-use crate::constants::message_ids::*;
-
-async fn _send(stream_ref: &SharedRef<TcpStream>, length: u32, id: Option<u8>) {
-    let mut buf: Vec<u8> = vec![];
-    buf.write_u32(length).await.unwrap();
-    if length != 0 {
-        let message_id = id.unwrap();
-        buf.push(message_id);
-    }
-
-    let _ = stream_ref.get_handle().await.write(&mut buf).await;
-    // println!("sent message, id {:?}, buffer: {:?}", id, buf);
-}
-
-async fn _recv_len(stream_ref: &SharedRef<TcpStream>) -> u32 {
-    let mut buf = [0u8; 4];
-    let _ = stream_ref
-        .get_handle()
-        .await
-        .try_read(&mut buf)
-        .unwrap_or_default();
-    BigEndian::read_u32(&buf)
-}
-
-async fn _recv(
-    stream_ref: &SharedRef<TcpStream>,
-    buf: &mut [u8],
-    n: u32,
-) -> Result<(), std::io::Error> {
-    let _ = stream_ref.get_handle().await.read_exact(buf).await;
-
-    // if buf[0] != PIECE {
-    //     println!("recieved message, len: {} {:?}", n, buf.to_vec());
-    // } else {
-    //     println!(
-    //         "received piece, len: {}, message_id: {}, index: {}, offset: {}",
-    //         n,
-    //         buf[0],
-    //         BigEndian::read_u32(&buf[1..]),
-    //         BigEndian::read_u32(&buf[5..]),
-    //     )
-    // }
-
-    Ok(())
-}
-
-pub async fn send(
-    stream_ref: SharedRef<TcpStream>,
-    length: u32,
-    id: Option<u8>,
-    // payload: Option<&mut Vec<u8>>,
-) {
-    _send(&stream_ref, length, id).await;
-}
-
-pub async fn recv_loop<'a>(
-    stream_ref: SharedRef<TcpStream>,
-    peer_ref: SharedRef<Peer>,
-    piece_handler: Arc<PieceHandler>,
-) {
-    loop {
-        let n: u32 = _recv_len(&stream_ref).await;
-        if n == 0 {
-            continue;
-        }
-
-        let mut buf: Vec<u8> = vec![0; n as usize];
-        let _ = _recv(&stream_ref, &mut buf, n).await.unwrap();
-
-        let message_id = buf[0];
-        if message_id == UNCHOKE {
-            peer_ref.get_handle().await.unchoke_me();
-            println!("unchoked");
-        } else if message_id == CHOKE {
-            peer_ref.get_handle().await.choke_me();
-            println!("choked");
-        } else if message_id == HAVE {
-            piece_handler
-                .enqueue_piece(BigEndian::read_u32(&buf[1..]))
-                .await;
-        } else if message_id == BITFIELD {
-            let piece_handler = Arc::clone(&piece_handler);
-            let bitfield = Bitfield::from((&buf[1..], piece_handler.info.num_pieces()));
-            tokio::spawn(async move {
-                for i in 0..bitfield.len() {
-                    if bitfield.get(i) == true {
-                        piece_handler.enqueue_piece(i).await;
-                        sleep(Duration::from_millis(2)).await;
-                    }
-                }
-            });
-        } else if message_id == PIECE {
-            let piece_index = BigEndian::read_u32(&buf[1..5]);
-            let block_offset = BigEndian::read_u32(&buf[5..9]);
-            let block = &buf[9..];
-            piece_handler
-                .recv_block(piece_index, block_offset, block)
-                .await;
-        }
-    }
-}
-
-pub async fn keep_alive(stream_ref: SharedRef<TcpStream>) {
-    loop {
-        _send(&stream_ref, 0, None).await;
-        sleep(Duration::from_secs(60)).await;
-    }
-}
+use crate::metadata::{Info, Metadata};
+use super::shared_data::SharedRef;
+use super::bitfield::Bitfield;
+use super::Peer;
 
 #[derive(Debug)]
 struct BlockRequest(u32, u32, u32);
@@ -233,6 +137,16 @@ impl PieceHandler {
             .get_handle()
             .await
             .push_back(piece_index);
+    }
+
+    pub async fn enqueue_bitfield(self: &Self, bitfield: &[u8]) {
+        let bitfield = Bitfield::from((bitfield, self.info.num_pieces()));
+        for (i, bit) in bitfield.enumerate() {
+            if bit {
+                self.enqueue_piece(i as u32).await;
+                sleep(Duration::from_millis(2)).await;
+            }
+        }
     }
 
     pub async fn request_piece(self: &Self, piece_index: u32, stream_ref: &SharedRef<TcpStream>) {
