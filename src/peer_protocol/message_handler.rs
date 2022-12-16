@@ -1,7 +1,7 @@
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
 
-use super::{*, bitfield::*};
+use super::{bitfield::*, *};
 use crate::constants::message_ids::*;
 
 async fn _send(stream_ref: &SharedRef<TcpStream>, length: u32, id: Option<u8>) {
@@ -74,6 +74,10 @@ pub async fn recv_loop<'a>(
         let message_id = buf[0];
         if message_id == UNCHOKE {
             peer_ref.get_handle().await.unchoke_me();
+            println!("unchoked");
+        } else if message_id == CHOKE {
+            peer_ref.get_handle().await.choke_me();
+            println!("choked");
         } else if message_id == HAVE {
             piece_handler
                 .enqueue_piece(BigEndian::read_u32(&buf[1..]))
@@ -93,10 +97,10 @@ pub async fn recv_loop<'a>(
             let piece_index = BigEndian::read_u32(&buf[1..5]);
             let block_offset = BigEndian::read_u32(&buf[5..9]);
             let block = &buf[9..];
-            piece_handler.recv_block(piece_index, block_offset, block).await;
+            piece_handler
+                .recv_block(piece_index, block_offset, block)
+                .await;
         }
-
-        sleep(Duration::from_millis(1)).await;
     }
 }
 
@@ -104,6 +108,23 @@ pub async fn keep_alive(stream_ref: SharedRef<TcpStream>) {
     loop {
         _send(&stream_ref, 0, None).await;
         sleep(Duration::from_secs(60)).await;
+    }
+}
+
+#[derive(Debug)]
+struct BlockRequest(u32, u32, u32);
+
+impl BlockRequest {
+    pub async fn send(self: &Self, handler: &SharedRef<TcpStream>) {
+        let mut buf: Vec<u8> = vec![];
+        buf.write_u32(13).await.unwrap();
+        buf.push(6);
+        buf.write_u32(self.0).await.unwrap();
+        buf.write_u32(self.1).await.unwrap();
+        buf.write_u32(self.2).await.unwrap();
+
+        let _ = handler.get_handle().await.write(&mut buf).await;
+        // println!("sent request piece message, {:?}", self);
     }
 }
 
@@ -127,14 +148,19 @@ impl Piece {
     }
 
     fn _block_index(self: &Self, offset: u32) -> u32 {
-        assert!(offset % self.block_size == 0, "{} {}", offset, self.block_size);
+        assert!(
+            offset % self.block_size == 0,
+            "{} {}",
+            offset,
+            self.block_size
+        );
         offset / self.block_size
     }
 
     fn recv_block(self: &mut Self, offset: u32, block: &[u8]) -> u32 {
         let block_index = self._block_index(offset);
         let rem = self.mask.set(block_index);
-        
+
         let s = offset as usize;
         let e = s + block.len();
 
@@ -148,7 +174,7 @@ impl Piece {
         self.hash == piece_hash
     }
 
-    fn save(self: &Self) -> Result<(), &'static str>{
+    fn save(self: &Self) -> Result<(), &'static str> {
         if self.mask.rem() > 0 {
             Err("Piece is not fully downloaded yet")
         } else if !self.verify_hash() {
@@ -159,42 +185,25 @@ impl Piece {
         }
     }
 
-    async fn enqueue(self: &Self, q: SharedRef<VecDeque<BlockRequest>>) {
+    async fn request(self: &Self, stream_ref: &SharedRef<TcpStream>) {
         let mut cur_offset: u32 = 0;
         let piece_len = self.bytes.len() as u32;
 
         while cur_offset != piece_len {
             let block_size = cmp::min(self.block_size, piece_len - cur_offset);
-            let request = BlockRequest(self.index, cur_offset, block_size);
-            q.get_handle().await.push_back(request);
+            BlockRequest(self.index, cur_offset, block_size)
+                .send(stream_ref)
+                .await;
             cur_offset += block_size;
         }
     }
 }
 
-#[derive(Debug)]
-struct BlockRequest(u32, u32, u32);
-
-impl BlockRequest {
-    pub async fn send(self: &Self, handler: &SharedRef<TcpStream>) {
-        let mut buf: Vec<u8> = vec![];
-        buf.write_u32(13).await.unwrap();
-        buf.push(6);
-        buf.write_u32(self.0).await.unwrap();
-        buf.write_u32(self.1).await.unwrap();
-        buf.write_u32(self.2).await.unwrap();
-
-        let _ = handler.get_handle().await.write(&mut buf).await;
-        // println!("sent request piece message, {:?}", self);
-    }
-}
-
 pub struct PieceHandler {
-    requests_queue: SharedRef<VecDeque<BlockRequest>>,
+    requests_queue: SharedRef<VecDeque<u32>>,
     info: Arc<Info>,
     downloaded_pieces: SharedRef<Bitfield>,
     requested_pieces: SharedRef<HashMap<u32, Piece>>,
-    num_requests: SharedRef<u32>,
     requests_cap: u32,
     block_size: u32,
 }
@@ -210,17 +219,23 @@ impl PieceHandler {
             info,
             downloaded_pieces: SharedRef::new(Some(Bitfield::new(num_pieces))),
             requested_pieces: SharedRef::new(Some(HashMap::new())),
-            num_requests: SharedRef::new(Some(0)),
-            requests_cap: 10,
+            requests_cap: 5,
             block_size,
         }
     }
 
     async fn _full(self: &Self) -> bool {
-        return *self.num_requests.get_handle().await > self.requests_cap;
+        return self.requested_pieces.get_handle().await.len() as u32 > self.requests_cap;
     }
 
     pub async fn enqueue_piece(self: &Self, piece_index: u32) {
+        self.requests_queue
+            .get_handle()
+            .await
+            .push_back(piece_index);
+    }
+
+    pub async fn request_piece(self: &Self, piece_index: u32, stream_ref: &SharedRef<TcpStream>) {
         let piece = Piece::new(
             piece_index,
             self.info.piece_len(piece_index),
@@ -228,7 +243,8 @@ impl PieceHandler {
             self.block_size,
             &self.info.piece_hash(piece_index),
         );
-        piece.enqueue(self.requests_queue.clone()).await;
+
+        piece.request(stream_ref).await;
 
         self.requested_pieces
             .get_handle()
@@ -237,15 +253,16 @@ impl PieceHandler {
     }
 
     pub async fn recv_block(self: &Self, piece_index: u32, block_offset: u32, block: &[u8]) {
-        *self.num_requests.get_handle().await -= 1;
-
         let mut rp = self.requested_pieces.get_handle().await;
         let piece = rp.get_mut(&piece_index).unwrap();
         if piece.recv_block(block_offset, block) == 0 {
             piece.save().unwrap();
             rp.remove(&piece_index);
             self.downloaded_pieces.get_handle().await.set(piece_index);
-            println!("size of map {}", rp.len());
+            println!(
+                "size of map {}",
+                rp.len(),
+            );
         }
     }
 
@@ -259,10 +276,8 @@ impl PieceHandler {
                 sleep(Duration::from_millis(2)).await;
             } else {
                 let mut q = self.requests_queue.get_handle().await;
-                if q.len() > 0 {
-                    q.front().unwrap().send(&stream_ref).await;
-                    q.pop_front();
-                    *self.num_requests.get_handle().await += 1;
+                if let Some(piece_index) = q.pop_front() {
+                    self.request_piece(piece_index, &stream_ref).await;
                 }
             }
         }

@@ -110,6 +110,10 @@ impl Peer {
     pub fn unchoke_me(self: &mut Self) {
         self.state.client_choked = false;
     }
+
+    pub fn choke_me(self: &mut Self) {
+        self.state.client_choked = true;
+    }
 }
 
 impl From<[u8; 6]> for Peer {
