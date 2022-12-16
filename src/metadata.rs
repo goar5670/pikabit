@@ -68,6 +68,10 @@ impl Info {
         ((self.piece_len(piece_index) + block_size - 1) / block_size) as u32
     }
 
+    pub fn piece_hash(self: &Self, piece_index: u32) -> [u8; 20] {
+        let offset = (piece_index * 20) as usize;
+        self.pieces[offset..offset + 20].try_into().unwrap()
+    }
 }
 
 #[derive(Debug, Deserialize)]
