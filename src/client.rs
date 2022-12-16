@@ -1,5 +1,5 @@
 use serde_bencode;
-use std::{fs, error::Error, string::ToString};
+use std::{error::Error, fs, string::ToString};
 
 use crate::metadata::Metadata;
 use crate::peer_protocol::{Peer, PeerHandler, PeerId};

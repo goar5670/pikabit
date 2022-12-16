@@ -72,6 +72,10 @@ impl Info {
         let offset = (piece_index * 20) as usize;
         self.pieces[offset..offset + 20].try_into().unwrap()
     }
+
+    pub fn filename(self: &Self) -> &String {
+        &self.name
+    }
 }
 
 #[derive(Debug, Deserialize)]

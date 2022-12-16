@@ -1,7 +1,8 @@
-use sha1::{Sha1, Digest};
+use log::info;
+use sha1::{Digest, Sha1};
 use std::{
     cmp,
-    collections::{VecDeque, HashMap},
+    collections::{HashMap, VecDeque},
     sync::Arc,
 };
 use tokio::{
@@ -10,10 +11,11 @@ use tokio::{
     time::{sleep, Duration},
 };
 
-use crate::metadata::{Info, Metadata};
-use super::shared_data::SharedRef;
 use super::bitfield::Bitfield;
+use super::shared_data::SharedRef;
 use super::Peer;
+use crate::file::FileHandler;
+use crate::metadata::{Info, Metadata};
 
 #[derive(Debug)]
 struct BlockRequest(u32, u32, u32);
@@ -78,13 +80,27 @@ impl Piece {
         self.hash == piece_hash
     }
 
-    fn save(self: &Self) -> Result<(), &'static str> {
+    async fn save(
+        self: &Self,
+        offset: u64,
+        file_handler: SharedRef<FileHandler>,
+    ) -> Result<(), &'static str> {
         if self.mask.rem() > 0 {
             Err("Piece is not fully downloaded yet")
         } else if !self.verify_hash() {
             Err("Piece hash verification failed")
         } else {
-            println!("Piece {} saved", self.index);
+            file_handler
+                .get_handle()
+                .await
+                .write_piece(offset, &self.bytes)
+                .await;
+            info!(
+                "Piece {} wrote to disk, offset: {}, size: {}",
+                self.index,
+                offset,
+                self.bytes.len()
+            );
             Ok(())
         }
     }
@@ -106,6 +122,7 @@ impl Piece {
 pub struct PieceHandler {
     requests_queue: SharedRef<VecDeque<u32>>,
     info: Arc<Info>,
+    file_handler: SharedRef<FileHandler>,
     downloaded_pieces: SharedRef<Bitfield>,
     requested_pieces: SharedRef<HashMap<u32, Piece>>,
     requests_cap: u32,
@@ -113,23 +130,30 @@ pub struct PieceHandler {
 }
 
 impl PieceHandler {
-    pub fn new(metadata: &Metadata) -> Self {
+    pub async fn new(metadata: &Metadata) -> Self {
         let info = Arc::clone(&metadata.info);
-        let num_pieces = info.num_pieces();
-        let block_size = 16 * 1024;
-        println!("number of pieces: {}", num_pieces);
+        // let num_pieces = info.num_pieces();
+
+        // println!("number of pieces: {}", num_pieces);
         Self {
             requests_queue: SharedRef::new(Some(VecDeque::new())),
-            info,
-            downloaded_pieces: SharedRef::new(Some(Bitfield::new(num_pieces))),
+            file_handler: SharedRef::new(Some(FileHandler::new(&info.filename()).await)),
+            downloaded_pieces: SharedRef::new(Some(Bitfield::new(info.num_pieces()))),
             requested_pieces: SharedRef::new(Some(HashMap::new())),
+            info,
             requests_cap: 5,
-            block_size,
+            block_size: 16 * 1024,
         }
     }
 
     async fn _full(self: &Self) -> bool {
         return self.requested_pieces.get_handle().await.len() as u32 > self.requests_cap;
+    }
+
+    fn _piece_offset(self: &Self, piece_index: u32) -> u64 {
+        self.info.num_blocks(piece_index, self.block_size) as u64
+            * self.block_size as u64
+            * piece_index as u64
     }
 
     pub async fn enqueue_piece(self: &Self, piece_index: u32) {
@@ -170,13 +194,12 @@ impl PieceHandler {
         let mut rp = self.requested_pieces.get_handle().await;
         let piece = rp.get_mut(&piece_index).unwrap();
         if piece.recv_block(block_offset, block) == 0 {
-            piece.save().unwrap();
+            piece
+                .save(self._piece_offset(piece.index), self.file_handler.clone())
+                .await
+                .unwrap();
             rp.remove(&piece_index);
             self.downloaded_pieces.get_handle().await.set(piece_index);
-            println!(
-                "size of map {}",
-                rp.len(),
-            );
         }
     }
 

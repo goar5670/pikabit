@@ -24,9 +24,9 @@ impl Bitfield {
         (byte & (1 << offset)) != 0
     }
 
-    pub fn len(self: &Self) -> u32 {
-        self.length
-    }
+    // pub fn len(self: &Self) -> u32 {
+    //     self.length
+    // }
 
     pub fn rem(self: &Self) -> u32 {
         self.length - self.cnt_marked
@@ -38,7 +38,10 @@ impl Bitfield {
         }
 
         let (byte_index, offset) = Self::_get_bit_index(index);
-        Some(Self::_check_offset(*self.inner.get(byte_index).unwrap(), offset))
+        Some(Self::_check_offset(
+            *self.inner.get(byte_index).unwrap(),
+            offset,
+        ))
     }
 
     pub fn set(self: &mut Self, index: u32) -> u32 {

@@ -1,15 +1,16 @@
 use byteorder::{BigEndian, ByteOrder};
+use log::{error, info, warn};
 use std::sync::Arc;
 use tokio::{
-    io::{AsyncWriteExt, AsyncReadExt},
+    io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     time::{sleep, Duration},
 };
 
-use crate::constants::message_ids::*;
 use super::piece::PieceHandler;
 use super::shared_data::SharedRef;
 use super::Peer;
+use crate::constants::message_ids::*;
 
 async fn _send(stream_ref: &SharedRef<TcpStream>, length: u32, id: Option<u8>) {
     let mut buf: Vec<u8> = vec![];
@@ -25,39 +26,47 @@ async fn _send(stream_ref: &SharedRef<TcpStream>, length: u32, id: Option<u8>) {
 
 async fn _recv_len(stream_ref: &SharedRef<TcpStream>) -> u32 {
     let mut buf = [0u8; 4];
-    let _ = stream_ref
+    let n = stream_ref
         .get_handle()
         .await
         .try_read(&mut buf)
         .unwrap_or_default();
-    BigEndian::read_u32(&buf)
+
+    match n {
+        0 => 0,
+        4 => BigEndian::read_u32(&buf),
+        _ => {
+            let _ = stream_ref
+                .get_handle()
+                .await
+                .read_exact(&mut buf[n..])
+                .await
+                .unwrap();
+            BigEndian::read_u32(&buf)
+        }
+    }
 }
 
-async fn _recv(
-    stream_ref: &SharedRef<TcpStream>,
-    buf: &mut [u8],
-) {
-    stream_ref.get_handle().await.read_exact(buf).await.unwrap();
+async fn _recv(stream_ref: &SharedRef<TcpStream>, buf: &mut [u8]) -> bool {
+    let n = stream_ref
+        .get_handle()
+        .await
+        .read_exact(buf)
+        .await
+        .unwrap_or(0);
+    if n != buf.len() {
+        error!(
+            "Unexpected behaviour, read {} bytes expected {}",
+            n,
+            buf.len()
+        );
+        error!("{:?}", &buf[..20]);
+    }
 
-    // if buf[0] != PIECE {
-    //     println!("recieved message, len: {} {:?}", n, buf.to_vec());
-    // } else {
-    //     println!(
-    //         "received piece, len: {}, message_id: {}, index: {}, offset: {}",
-    //         n,
-    //         buf[0],
-    //         BigEndian::read_u32(&buf[1..]),
-    //         BigEndian::read_u32(&buf[5..]),
-    //     )
-    // }
+    return n == buf.len();
 }
 
-pub async fn send(
-    stream_ref: SharedRef<TcpStream>,
-    length: u32,
-    id: Option<u8>,
-    // payload: Option<&mut Vec<u8>>,
-) {
+pub async fn send(stream_ref: SharedRef<TcpStream>, length: u32, id: Option<u8>) {
     _send(&stream_ref, length, id).await;
 }
 
@@ -73,7 +82,9 @@ pub async fn recv_loop<'a>(
         }
 
         let mut buf: Vec<u8> = vec![0; n as usize];
-        _recv(&stream_ref, &mut buf).await;
+        if !_recv(&stream_ref, &mut buf).await {
+            return;
+        }
 
         let message_id = buf[0];
         if message_id == CHOKE {
@@ -82,10 +93,8 @@ pub async fn recv_loop<'a>(
         } else if message_id == UNCHOKE {
             peer_ref.get_handle().await.unchoke_me();
             println!("unchoked");
-        }  else if message_id == INTERESTED {
-
+        } else if message_id == INTERESTED {
         } else if message_id == NOT_INTERESTED {
-
         } else if message_id == HAVE {
             piece_handler
                 .enqueue_piece(BigEndian::read_u32(&buf[1..]))
@@ -93,7 +102,6 @@ pub async fn recv_loop<'a>(
         } else if message_id == BITFIELD {
             piece_handler.enqueue_bitfield(&buf[1..]).await;
         } else if message_id == REQUEST {
-            
         } else if message_id == PIECE {
             let piece_index = BigEndian::read_u32(&buf[1..5]);
             let block_offset = BigEndian::read_u32(&buf[5..9]);
@@ -110,7 +118,6 @@ pub async fn recv_loop<'a>(
 pub async fn keep_alive(stream_ref: SharedRef<TcpStream>) {
     loop {
         _send(&stream_ref, 0, None).await;
-        sleep(Duration::from_secs(60)).await;
+        sleep(Duration::from_secs(2 * 60)).await;
     }
 }
-

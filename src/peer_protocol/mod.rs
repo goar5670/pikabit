@@ -17,10 +17,10 @@ use crate::metadata::Metadata;
 use piece::PieceHandler;
 use shared_data::SharedRef;
 
-mod shared_data;
 mod bitfield;
 mod message;
 mod piece;
+mod shared_data;
 
 #[derive(Debug, PartialEq)]
 pub struct PeerId {
@@ -167,7 +167,7 @@ impl PeerHandler {
         let mut buff = [0u8; 128];
         let buff_len = stream.read(&mut buff).await.unwrap();
 
-        println!("buff_len = {},{:?}", buff_len, &buff[payload.len() - 20..]);
+        // println!("buff_len = {}, {:?}", buff_len, &buff[payload.len() - 20..]);
         // debug_assert_eq!(buff[..payload.len() - 20], payload[..payload.len() - 20]);
         // debug_assert_eq!(buff_len, payload.len());
 
@@ -187,7 +187,7 @@ impl PeerHandler {
             String::from_utf8(self.peer.get_handle().await.id.as_ref().unwrap().to_vec()).unwrap()
         );
 
-        let piece_handler: Arc<PieceHandler> = Arc::new(PieceHandler::new(&metadata));
+        let piece_handler: Arc<PieceHandler> = Arc::new(PieceHandler::new(&metadata).await);
 
         message::send(self.stream.clone(), 1, Some(2)).await;
         let keep_alive_handle = tokio::spawn(message::keep_alive(self.stream.clone()));
