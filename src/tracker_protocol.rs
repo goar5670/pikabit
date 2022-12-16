@@ -112,12 +112,7 @@ pub mod http {
         pub fn get_peers(self: &Self) -> Vec<[u8; 6]> {
             self.peers
                 .chunks(6)
-                .map(|chunck| {
-                    let mut ret = [0u8; 6];
-                    ret.copy_from_slice(chunck);
-
-                    ret
-                })
+                .map(|chunck| chunck.try_into().unwrap())
                 .collect()
         }
     }

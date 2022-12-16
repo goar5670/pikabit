@@ -95,9 +95,9 @@ pub struct Metadata {
 impl Metadata {
     pub fn get_info_hash(self: &Self) -> [u8; 20] {
         let bencoded = serde_bencode::to_bytes(&self.info).unwrap();
-        let info_hash = sha1_hash(&bencoded);
+        let info_hash = Sha1::digest(&bencoded);
 
-        info_hash
+        info_hash.into()
     }
 
     pub fn get_tracker_url(self: &Self) -> String {
@@ -107,17 +107,6 @@ impl Metadata {
     // pub fn get_piece_length(self: &Self) -> u64 {
     //     self.info.piece_length
     // }
-}
-
-pub fn sha1_hash(bytes: &[u8]) -> [u8; 20] {
-    let mut hasher = Sha1::new();
-    hasher.update(&bytes);
-    let result_arr = hasher.finalize();
-    debug_assert_eq!(result_arr.len(), 20);
-    let mut result = [0u8; 20];
-    result.copy_from_slice(&result_arr);
-
-    result
 }
 
 #[cfg(test)]

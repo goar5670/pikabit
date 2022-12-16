@@ -17,10 +17,10 @@ use tokio::{
 };
 
 use crate::metadata::{Info, Metadata};
-use message_handler::*;
+use message_handler::PieceHandler;
 
-mod message_handler;
 mod bitfield;
+mod message_handler;
 
 #[derive(Debug, PartialEq)]
 pub struct PeerId {
@@ -49,10 +49,9 @@ impl PeerId {
 
         debug_assert_eq!(peer_id.len(), 20);
 
-        let mut bytes = [0u8; 20];
-        bytes.copy_from_slice(&peer_id.as_bytes()[..20]);
-
-        Self { inner: bytes }
+        Self {
+            inner: peer_id.as_bytes()[..20].try_into().unwrap(),
+        }
     }
 
     fn to_vec(self: &Self) -> Vec<u8> {
@@ -64,10 +63,9 @@ impl From<&[u8]> for PeerId {
     fn from(slice: &[u8]) -> Self {
         debug_assert_eq!(slice.len(), 20);
 
-        let mut bytes = [0u8; 20];
-        bytes.copy_from_slice(&slice[..20]);
-
-        Self { inner: bytes }
+        Self {
+            inner: slice.try_into().unwrap(),
+        }
     }
 }
 
@@ -150,7 +148,6 @@ impl<T> SharedRef<T> {
     }
 }
 
-
 pub struct PeerHandler {
     peer: SharedRef<Peer>,
     stream: SharedRef<TcpStream>,
@@ -193,10 +190,7 @@ impl PeerHandler {
         // debug_assert_eq!(buff[..payload.len() - 20], payload[..payload.len() - 20]);
         // debug_assert_eq!(buff_len, payload.len());
 
-        let mut ret = [0u8; 20];
-        ret.copy_from_slice(&buff[buff_len - 20..buff_len]);
-
-        ret
+        buff[buff_len - 20..buff_len].try_into().unwrap()
     }
 
     pub async fn run(self: &mut Self, metadata: &Metadata, client_id: &PeerId) {
@@ -221,7 +215,9 @@ impl PeerHandler {
             self.peer.clone(),
             Arc::clone(&piece_handler),
         ));
-        piece_handler.request_loop(self.stream.clone(), self.peer.clone()).await;
+        piece_handler
+            .request_loop(self.stream.clone(), self.peer.clone())
+            .await;
 
         keep_alive_handle.await.unwrap();
         recv_loop_handle.await.unwrap();
