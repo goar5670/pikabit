@@ -1,3 +1,4 @@
+use log::info;
 use serde_bencode;
 use std::{error::Error, fs, string::ToString};
 
@@ -60,7 +61,7 @@ impl Client {
         // todo: move this to config
         let max_iters = 100;
 
-        println!("Fetching peers from tracker...");
+        info!("Fetching peers from tracker...");
 
         while iters < max_iters {
             let response: Response =
@@ -78,7 +79,7 @@ impl Client {
 
     pub async fn run(self: &mut Self) {
         let peers = self.request_peers().await.unwrap();
-        println!("number of peers {}", peers.len());
+        info!("number of peers {}", peers.len());
 
         let mut peer_handler = PeerHandler::new(Peer::from(peers[0]));
         peer_handler.run(&self.torrent, &self.peer_id).await;

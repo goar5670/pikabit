@@ -55,12 +55,10 @@ impl Bitfield {
             return self.rem();
         }
 
-        //   println!("before set {}", byte);
         *byte &= 1 << offset;
         self.cnt_marked += 1;
 
         self.rem()
-        //   println!("after set {}", self.inner.get(byte_index).unwrap());
     }
 }
 

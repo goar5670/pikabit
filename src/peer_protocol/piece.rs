@@ -30,7 +30,6 @@ impl BlockRequest {
         buf.write_u32(self.2).await.unwrap();
 
         let _ = handler.get_handle().await.write(&mut buf).await;
-        // println!("sent request piece message, {:?}", self);
     }
 }
 
@@ -132,9 +131,7 @@ pub struct PieceHandler {
 impl PieceHandler {
     pub async fn new(metadata: &Metadata) -> Self {
         let info = Arc::clone(&metadata.info);
-        // let num_pieces = info.num_pieces();
 
-        // println!("number of pieces: {}", num_pieces);
         Self {
             requests_queue: SharedRef::new(Some(VecDeque::new())),
             file_handler: SharedRef::new(Some(FileHandler::new(&info.filename()).await)),

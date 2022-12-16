@@ -1,5 +1,5 @@
 use byteorder::{BigEndian, ByteOrder};
-use log::error;
+use log::{error, info};
 use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -21,7 +21,6 @@ async fn _send(stream_ref: &SharedRef<TcpStream>, length: u32, id: Option<u8>) {
     }
 
     let _ = stream_ref.get_handle().await.write(&mut buf).await;
-    // println!("sent message, id {:?}, buffer: {:?}", id, buf);
 }
 
 async fn _recv_len(stream_ref: &SharedRef<TcpStream>) -> u32 {
@@ -89,10 +88,10 @@ pub async fn recv_loop<'a>(
         let message_id = buf[0];
         if message_id == CHOKE {
             peer_ref.get_handle().await.choke_me();
-            println!("choked");
+            info!("choked");
         } else if message_id == UNCHOKE {
             peer_ref.get_handle().await.unchoke_me();
-            println!("unchoked");
+            info!("unchoked");
         } else if message_id == INTERESTED {
         } else if message_id == NOT_INTERESTED {
         } else if message_id == HAVE {
@@ -110,7 +109,7 @@ pub async fn recv_loop<'a>(
                 .recv_block(piece_index, block_offset, block)
                 .await;
         } else if message_id == CANCEL {
-            println!("cancel message received");
+            info!("cancel message received");
         }
     }
 }

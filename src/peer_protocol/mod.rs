@@ -2,6 +2,7 @@
 // todo: implement block pipelining (from bep 3) | priority: low
 
 use byteorder::{BigEndian, ByteOrder};
+use log::info;
 use rand::{distributions::Alphanumeric, Rng};
 use std::{
     cmp,
@@ -13,8 +14,8 @@ use tokio::{
     net::TcpStream,
 };
 
-use crate::metadata::Metadata;
 use crate::concurrency::SharedRef;
+use crate::metadata::Metadata;
 use piece::PieceHandler;
 
 mod bitfield;
@@ -102,7 +103,6 @@ pub struct Peer {
 
 impl Peer {
     pub async fn connect(self: &Self) -> io::Result<TcpStream> {
-        println!("{:?}", self);
         TcpStream::connect(&self.address).await
     }
 
@@ -166,7 +166,6 @@ impl PeerHandler {
         let mut buff = [0u8; 128];
         let buff_len = stream.read(&mut buff).await.unwrap();
 
-        // println!("buff_len = {}, {:?}", buff_len, &buff[payload.len() - 20..]);
         // debug_assert_eq!(buff[..payload.len() - 20], payload[..payload.len() - 20]);
         // debug_assert_eq!(buff_len, payload.len());
 
@@ -181,7 +180,7 @@ impl PeerHandler {
                 .await
                 .as_ref(),
         ));
-        println!(
+        info!(
             "peer id: {}",
             String::from_utf8(self.peer.get_handle().await.id.as_ref().unwrap().to_vec()).unwrap()
         );
