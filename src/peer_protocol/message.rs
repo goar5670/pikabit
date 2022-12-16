@@ -1,5 +1,5 @@
 use byteorder::{BigEndian, ByteOrder};
-use log::{error, info, warn};
+use log::error;
 use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -8,8 +8,8 @@ use tokio::{
 };
 
 use super::piece::PieceHandler;
-use super::shared_data::SharedRef;
 use super::Peer;
+use crate::concurrency::SharedRef;
 use crate::constants::message_ids::*;
 
 async fn _send(stream_ref: &SharedRef<TcpStream>, length: u32, id: Option<u8>) {

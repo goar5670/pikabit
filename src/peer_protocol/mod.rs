@@ -14,13 +14,12 @@ use tokio::{
 };
 
 use crate::metadata::Metadata;
+use crate::concurrency::SharedRef;
 use piece::PieceHandler;
-use shared_data::SharedRef;
 
 mod bitfield;
 mod message;
 mod piece;
-mod shared_data;
 
 #[derive(Debug, PartialEq)]
 pub struct PeerId {

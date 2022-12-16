@@ -12,8 +12,8 @@ use tokio::{
 };
 
 use super::bitfield::Bitfield;
-use super::shared_data::SharedRef;
 use super::Peer;
+use crate::concurrency::SharedRef;
 use crate::file::FileHandler;
 use crate::metadata::{Info, Metadata};
 
