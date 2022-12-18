@@ -1,11 +1,14 @@
-use log::{info, warn, error};
 use byteorder::{BigEndian, ByteOrder};
+use log::{error, info, warn};
 use rand::{distributions::Alphanumeric, Rng};
 use std::{
-  cmp,
-  net::{Ipv4Addr, SocketAddr},
+    cmp,
+    net::{Ipv4Addr, SocketAddr},
 };
-use tokio::{io::{self, AsyncWriteExt, AsyncReadExt}, net::TcpStream};
+use tokio::{
+    io::{self, AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
 
 use crate::{common, concurrency::SharedRef};
 
@@ -98,11 +101,7 @@ impl Peer {
         Ok(received[received.len() - 20..].try_into().unwrap())
     }
 
-    pub async fn handshake(
-        self: &mut Self,
-        payload: &[u8; 68],
-        stream_ref: SharedRef<TcpStream>,
-    ) {
+    pub async fn handshake(self: &mut Self, payload: &[u8; 68], stream_ref: SharedRef<TcpStream>) {
         let mut stream = stream_ref.get_handle().await;
         let _ = stream.write(payload).await;
 
@@ -114,10 +113,7 @@ impl Peer {
         }
 
         let peer_id = self._verify_handshake(&buf, payload).unwrap();
-        info!(
-            "peer id: {}",
-            String::from_utf8(peer_id.to_vec()).unwrap()
-        );
+        info!("peer id: {}", String::from_utf8(peer_id.to_vec()).unwrap());
         self.id = Some(PeerId::from(&peer_id));
     }
 }

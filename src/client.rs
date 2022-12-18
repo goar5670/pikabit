@@ -3,8 +3,8 @@ use serde_bencode;
 use std::{error::Error, fs};
 
 use crate::metadata::Metadata;
-use crate::peer_protocol::PeerHandler;
 use crate::peer::*;
+use crate::peer_protocol::PeerHandler;
 use crate::tracker_protocol::http::{Event, Request, Response};
 
 pub struct Client {

@@ -12,10 +12,10 @@ use tokio::{
 };
 
 use super::bitfield::Bitfield;
-use crate::peer::State;
 use crate::concurrency::SharedRef;
 use crate::file::FileHandler;
 use crate::metadata::{Info, Metadata};
+use crate::peer::State;
 
 #[derive(Debug)]
 struct BlockRequest(u32, u32, u32);
@@ -201,7 +201,7 @@ impl PieceHandler {
     }
 
     pub async fn request_loop(
-        self: &Self,
+        self: Arc<Self>,
         stream_ref: SharedRef<TcpStream>,
         peer_state_ref: SharedRef<State>,
     ) {
