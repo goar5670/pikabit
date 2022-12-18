@@ -8,7 +8,7 @@ use tokio::{
 };
 
 use super::piece::PieceHandler;
-use super::Peer;
+use crate::peer::State;
 use crate::concurrency::SharedRef;
 use crate::constants::message_ids::*;
 
@@ -71,7 +71,7 @@ pub async fn send(stream_ref: SharedRef<TcpStream>, length: u32, id: Option<u8>)
 
 pub async fn recv_loop<'a>(
     stream_ref: SharedRef<TcpStream>,
-    peer_ref: SharedRef<Peer>,
+    peer_state_ref: SharedRef<State>,
     piece_handler: Arc<PieceHandler>,
 ) {
     loop {
@@ -87,10 +87,10 @@ pub async fn recv_loop<'a>(
 
         let message_id = buf[0];
         if message_id == CHOKE {
-            peer_ref.get_handle().await.choke_me();
+            peer_state_ref.get_handle().await.0 = true;
             info!("choked");
         } else if message_id == UNCHOKE {
-            peer_ref.get_handle().await.unchoke_me();
+            peer_state_ref.get_handle().await.0 = false;
             info!("unchoked");
         } else if message_id == INTERESTED {
         } else if message_id == NOT_INTERESTED {

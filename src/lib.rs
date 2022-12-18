@@ -1,8 +1,10 @@
 pub mod client;
+pub mod common;
 pub mod concurrency;
 pub mod constants;
 pub mod file;
 pub mod metadata;
+pub mod peer;
 pub mod peer_protocol;
 pub mod tracker_protocol;
 

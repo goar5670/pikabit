@@ -1,9 +1,10 @@
 use log::info;
 use serde_bencode;
-use std::{error::Error, fs, string::ToString};
+use std::{error::Error, fs};
 
 use crate::metadata::Metadata;
-use crate::peer_protocol::{Peer, PeerHandler, PeerId};
+use crate::peer_protocol::PeerHandler;
+use crate::peer::*;
 use crate::tracker_protocol::http::{Event, Request, Response};
 
 pub struct Client {

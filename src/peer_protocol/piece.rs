@@ -12,7 +12,7 @@ use tokio::{
 };
 
 use super::bitfield::Bitfield;
-use super::Peer;
+use crate::peer::State;
 use crate::concurrency::SharedRef;
 use crate::file::FileHandler;
 use crate::metadata::{Info, Metadata};
@@ -203,10 +203,10 @@ impl PieceHandler {
     pub async fn request_loop(
         self: &Self,
         stream_ref: SharedRef<TcpStream>,
-        peer_ref: SharedRef<Peer>,
+        peer_state_ref: SharedRef<State>,
     ) {
         while self.downloaded_pieces.get_handle().await.rem() > 0 {
-            if self._full().await || peer_ref.get_handle().await.state.client_choked {
+            if self._full().await || peer_state_ref.get_handle().await.0 {
                 sleep(Duration::from_millis(2)).await;
             } else {
                 let mut q = self.requests_queue.get_handle().await;
