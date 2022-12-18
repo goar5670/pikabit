@@ -133,10 +133,10 @@ impl PieceHandler {
         let info = Arc::clone(&metadata.info);
 
         Self {
-            requests_queue: SharedRef::new(Some(VecDeque::new())),
-            file_handler: SharedRef::new(Some(FileHandler::new(&info.filename()).await)),
-            downloaded_pieces: SharedRef::new(Some(Bitfield::new(info.num_pieces()))),
-            requested_pieces: SharedRef::new(Some(HashMap::new())),
+            requests_queue: SharedRef::new(VecDeque::new()),
+            file_handler: SharedRef::new(FileHandler::new(&info.filename()).await),
+            downloaded_pieces: SharedRef::new(Bitfield::new(info.num_pieces())),
+            requested_pieces: SharedRef::new(HashMap::new()),
             info,
             requests_cap: 5,
             block_size: 16 * 1024,

@@ -3,7 +3,7 @@
 
 use futures::future::join_all;
 use std::sync::Arc;
-use tokio::net::TcpStream;
+// use tokio::net::TcpStream;
 
 use crate::peer::*;
 use crate::{concurrency::SharedRef, metadata::Metadata};
@@ -18,15 +18,13 @@ pub struct PeerHandler {
     peer: Peer,
     // (am_choked, am_interested, peer_choked, peer_interested)
     state: SharedRef<State>,
-    stream: SharedRef<TcpStream>,
 }
 
 impl PeerHandler {
     pub fn new(peer: Peer) -> Self {
         Self {
             peer,
-            state: SharedRef::new(Some((true, false, true, false))),
-            stream: SharedRef::new(None),
+            state: SharedRef::new((true, false, true, false)),
         }
     }
 
@@ -42,14 +40,14 @@ impl PeerHandler {
     }
 
     pub async fn run(self: &mut Self, metadata: &Metadata, client_id: &PeerId) {
-        self.stream = SharedRef::new(Some(self.peer.connect().await.unwrap()));
+        let stream = SharedRef::new(self.peer.connect().await.unwrap());
         let handshake_payload = self._handshake_payload(&metadata.get_info_hash(), client_id);
         self.peer
-            .handshake(&handshake_payload, self.stream.clone())
+            .handshake(&handshake_payload, stream.clone())
             .await;
 
         let piece_handler: Arc<PieceHandler> = Arc::new(PieceHandler::new(&metadata).await);
-        let msg_handler: Arc<MessageHandler> = Arc::new(MessageHandler::new(&self.stream));
+        let msg_handler: Arc<MessageHandler> = Arc::new(MessageHandler::new(&stream));
 
         let mut handles = vec![];
         MessageHandler::send(msg_handler.clone(), 1, Some(2)).await;
@@ -60,7 +58,7 @@ impl PeerHandler {
             msg_handler.recv_loop(self.state.clone(), Arc::clone(&piece_handler)),
         ));
         handles.push(tokio::spawn(
-            piece_handler.request_loop(self.stream.clone(), self.state.clone()),
+            piece_handler.request_loop(stream.clone(), self.state.clone()),
         ));
 
         join_all(handles).await;
