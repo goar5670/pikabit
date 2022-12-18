@@ -14,7 +14,7 @@ impl FileHandler {
                 .read(true)
                 .write(true)
                 .create(true)
-                .open(filename)
+                .open("resources/".to_owned() + filename)
                 .await
                 .unwrap(),
         }

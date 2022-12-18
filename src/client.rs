@@ -81,7 +81,7 @@ impl Client {
         let peers = self.request_peers().await.unwrap();
         info!("number of peers {}", peers.len());
 
-        let mut peer_handler = PeerHandler::new(Peer::from(peers[0]));
+        let mut peer_handler = PeerHandler::new(Peer::from(peers[1]));
         peer_handler.run(&self.torrent, &self.peer_id).await;
     }
 }

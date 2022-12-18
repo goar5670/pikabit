@@ -2,7 +2,7 @@
 // todo: implement block pipelining (from bep 3) | priority: low
 
 use byteorder::{BigEndian, ByteOrder};
-use log::info;
+use log::{error, info, warn};
 use rand::{distributions::Alphanumeric, Rng};
 use std::{
     cmp,
@@ -141,16 +141,14 @@ impl PeerHandler {
         }
     }
 
-    async fn connect(self: &mut Self) {
+    async fn _connect(self: &mut Self) {
         self.stream = SharedRef::new(Some(self.peer.get_handle().await.connect().await.unwrap()));
     }
 
-    fn get_handshake_payload(self: &Self, info_hash: &[u8; 20], client_id: &PeerId) -> Vec<u8> {
+    fn _handshake_payload(self: &Self, info_hash: &[u8; 20], client_id: &PeerId) -> Vec<u8> {
         let mut payload: Vec<u8> = Vec::new();
-
-        let protocol_name = "BitTorrent protocol".as_bytes();
         payload.push(19);
-        payload.extend(protocol_name);
+        payload.extend("BitTorrent protocol".as_bytes());
         payload.extend([0u8; 8]);
         payload.extend(info_hash);
         payload.extend(client_id.to_string().as_bytes());
@@ -158,28 +156,59 @@ impl PeerHandler {
         payload
     }
 
-    async fn handshake(self: &Self, payload: Vec<u8>) -> [u8; 20] {
+    fn _verify_handshake(
+        self: &Self,
+        received: &[u8],
+        sent: &[u8],
+    ) -> Result<[u8; 20], &'static str> {
+        if received[..20] != sent[..20] {
+            error!(
+                "Incorrect protocol name: {}",
+                String::from_utf8(received[..20].to_vec()).unwrap()
+            );
+            return Err("Incorrect protocol name");
+        } else if received[28..48] != sent[28..48] {
+            error!(
+                "Incorrect info hash: {:?}, expected: {:?}",
+                &received[28..48],
+                &sent[28..48]
+            );
+            return Err("Incorrect info hash");
+        }
+
+        if received[20..28] != sent[20..28] {
+            warn!("Different protocol extension: {:?}", &received[20..28]);
+        }
+
+        Ok(received[received.len() - 20..].try_into().unwrap())
+    }
+
+    async fn _handshake(
+        self: &Self,
+        info_hash: &[u8; 20],
+        client_id: &PeerId,
+    ) -> Result<[u8; 20], &'static str> {
+        let payload = self._handshake_payload(info_hash, client_id);
         let stream_ref = self.stream.clone();
         let mut stream = stream_ref.get_handle().await;
         let _ = stream.write(&payload).await;
 
-        let mut buff = [0u8; 128];
-        let buff_len = stream.read(&mut buff).await.unwrap();
+        let mut buf = [0u8; 68];
+        let n = stream.read_exact(&mut buf).await.unwrap();
 
-        // debug_assert_eq!(buff[..payload.len() - 20], payload[..payload.len() - 20]);
-        // debug_assert_eq!(buff_len, payload.len());
+        if n != payload.len() {
+            warn!("Unexpected buffer length {}, expected {}", n, payload.len());
+        }
 
-        buff[buff_len - 20..buff_len].try_into().unwrap()
+        self._verify_handshake(&buf, &payload)
     }
 
     pub async fn run(self: &mut Self, metadata: &Metadata, client_id: &PeerId) {
-        self.connect().await;
+        self._connect().await;
         let info_hash = &metadata.get_info_hash();
-        self.peer.get_handle().await.id = Some(PeerId::from(
-            self.handshake(self.get_handshake_payload(info_hash, client_id))
-                .await
-                .as_ref(),
-        ));
+        if let Ok(peer_id) = self._handshake(info_hash, client_id).await {
+            self.peer.get_handle().await.id = Some(PeerId::from(peer_id.as_ref()))
+        }
         info!(
             "peer id: {}",
             String::from_utf8(self.peer.get_handle().await.id.as_ref().unwrap().to_vec()).unwrap()
