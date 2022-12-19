@@ -1,4 +1,4 @@
-use log::info;
+use log::{debug, trace};
 use sha1::{Digest, Sha1};
 use std::{
     cmp,
@@ -6,32 +6,16 @@ use std::{
     sync::Arc,
 };
 use tokio::{
-    io::AsyncWriteExt,
-    net::TcpStream,
+    sync::mpsc::{Receiver, Sender},
     time::{sleep, Duration},
 };
 
 use super::bitfield::Bitfield;
+use super::msg::*;
 use crate::concurrency::SharedRef;
 use crate::file::FileHandler;
 use crate::metadata::{Info, Metadata};
-use crate::peer::State;
-
-#[derive(Debug)]
-struct BlockRequest(u32, u32, u32);
-
-impl BlockRequest {
-    pub async fn send(self: &Self, handler: &SharedRef<TcpStream>) {
-        let mut buf: Vec<u8> = vec![];
-        buf.write_u32(13).await.unwrap();
-        buf.push(6);
-        buf.write_u32(self.0).await.unwrap();
-        buf.write_u32(self.1).await.unwrap();
-        buf.write_u32(self.2).await.unwrap();
-
-        let _ = handler.get_handle().await.write(&mut buf).await;
-    }
-}
+use crate::peer;
 
 struct Piece {
     index: u32,
@@ -94,7 +78,7 @@ impl Piece {
                 .await
                 .write_piece(offset, &self.bytes)
                 .await;
-            info!(
+            debug!(
                 "Piece {} wrote to disk, offset: {}, size: {}",
                 self.index,
                 offset,
@@ -104,14 +88,16 @@ impl Piece {
         }
     }
 
-    async fn request(self: &Self, stream_ref: &SharedRef<TcpStream>) {
+    async fn request(self: &Self, msg_tx: &Sender<Message>) {
         let mut cur_offset: u32 = 0;
         let piece_len = self.bytes.len() as u32;
 
         while cur_offset != piece_len {
             let block_size = cmp::min(self.block_size, piece_len - cur_offset);
-            BlockRequest(self.index, cur_offset, block_size)
-                .send(stream_ref)
+            let _ = msg_tx
+                .send(Message::Request(Request::new(
+                    self.index, cur_offset, block_size,
+                )))
                 .await;
             cur_offset += block_size;
         }
@@ -119,32 +105,43 @@ impl Piece {
 }
 
 pub struct PieceHandler {
-    requests_queue: SharedRef<VecDeque<u32>>,
+    requests_queue: VecDeque<u32>,
     info: Arc<Info>,
     file_handler: SharedRef<FileHandler>,
-    downloaded_pieces: SharedRef<Bitfield>,
-    requested_pieces: SharedRef<HashMap<u32, Piece>>,
+    downloaded_pieces: Bitfield,
+    requested_pieces: HashMap<u32, Piece>,
     requests_cap: u32,
     block_size: u32,
+    peer_state_ref: SharedRef<peer::State>,
+    msg_tx: Sender<Message>,
+    own_rx: Receiver<Cmd>,
 }
 
 impl PieceHandler {
-    pub async fn new(metadata: &Metadata) -> Self {
+    pub async fn new(
+        metadata: &Metadata,
+        peer_state_ref: &SharedRef<peer::State>,
+        msg_tx: Sender<Message>,
+        own_rx: Receiver<Cmd>,
+    ) -> Self {
         let info = Arc::clone(&metadata.info);
 
         Self {
-            requests_queue: SharedRef::new(VecDeque::new()),
+            requests_queue: VecDeque::new(),
             file_handler: SharedRef::new(FileHandler::new(&info.filename()).await),
-            downloaded_pieces: SharedRef::new(Bitfield::new(info.num_pieces())),
-            requested_pieces: SharedRef::new(HashMap::new()),
+            downloaded_pieces: Bitfield::new(info.num_pieces()),
+            requested_pieces: HashMap::new(),
             info,
-            requests_cap: 5,
+            requests_cap: 1,
             block_size: 16 * 1024,
+            peer_state_ref: peer_state_ref.clone(),
+            msg_tx,
+            own_rx,
         }
     }
 
-    async fn _full(self: &Self) -> bool {
-        return self.requested_pieces.get_handle().await.len() as u32 > self.requests_cap;
+    fn _full(self: &Self) -> bool {
+        return self.requested_pieces.len() as u32 > self.requests_cap;
     }
 
     fn _piece_offset(self: &Self, piece_index: u32) -> u64 {
@@ -153,24 +150,21 @@ impl PieceHandler {
             * piece_index as u64
     }
 
-    pub async fn enqueue_piece(self: &Self, piece_index: u32) {
-        self.requests_queue
-            .get_handle()
-            .await
-            .push_back(piece_index);
+    pub fn enqueue_piece(&mut self, piece_index: u32) {
+        self.requests_queue.push_back(piece_index);
     }
 
-    pub async fn enqueue_bitfield(self: &Self, bitfield: &[u8]) {
+    pub async fn enqueue_bitfield(&mut self, bitfield: &[u8]) {
         let bitfield = Bitfield::from((bitfield, self.info.num_pieces()));
         for (i, bit) in bitfield.enumerate() {
             if bit {
-                self.enqueue_piece(i as u32).await;
+                self.enqueue_piece(i as u32);
                 sleep(Duration::from_millis(2)).await;
             }
         }
     }
 
-    pub async fn request_piece(self: &Self, piece_index: u32, stream_ref: &SharedRef<TcpStream>) {
+    pub async fn request_piece(self: &mut Self, piece_index: u32) {
         let piece = Piece::new(
             piece_index,
             self.info.piece_len(piece_index),
@@ -179,41 +173,46 @@ impl PieceHandler {
             &self.info.piece_hash(piece_index),
         );
 
-        piece.request(stream_ref).await;
+        piece.request(&self.msg_tx).await;
 
-        self.requested_pieces
-            .get_handle()
-            .await
-            .insert(piece_index, piece);
+        self.requested_pieces.insert(piece_index, piece);
     }
 
-    pub async fn recv_block(self: &Self, piece_index: u32, block_offset: u32, block: &[u8]) {
-        let mut rp = self.requested_pieces.get_handle().await;
-        let piece = rp.get_mut(&piece_index).unwrap();
-        if piece.recv_block(block_offset, block) == 0 {
-            piece
-                .save(self._piece_offset(piece.index), self.file_handler.clone())
-                .await
-                .unwrap();
-            rp.remove(&piece_index);
-            self.downloaded_pieces.get_handle().await.set(piece_index);
+    pub async fn recv_block(self: &mut Self, piece_index: u32, block_offset: u32, block: &[u8]) {
+        let offset = self._piece_offset(piece_index);
+        let piece = self.requested_pieces.get_mut(&piece_index).unwrap();
+        let rem = piece.recv_block(block_offset, block);
+        if rem == 0 {
+            piece.save(offset, self.file_handler.clone()).await.unwrap();
+            self.requested_pieces.remove(&piece_index);
+            self.downloaded_pieces.set(piece_index);
         }
     }
 
-    pub async fn request_loop(
-        self: Arc<Self>,
-        stream_ref: SharedRef<TcpStream>,
-        peer_state_ref: SharedRef<State>,
-    ) {
-        while self.downloaded_pieces.get_handle().await.rem() > 0 {
-            if self._full().await || peer_state_ref.get_handle().await.0 {
-                sleep(Duration::from_millis(2)).await;
-            } else {
-                let mut q = self.requests_queue.get_handle().await;
-                if let Some(piece_index) = q.pop_front() {
-                    self.request_piece(piece_index, &stream_ref).await;
+    pub async fn run(mut self) {
+        while self.downloaded_pieces.rem() > 0 {
+            if let Ok(msg) = self.own_rx.try_recv() {
+                match msg {
+                    Cmd::EnqPiece(index) => self.enqueue_piece(index),
+                    Cmd::EnqBitfield(buf) => self.enqueue_bitfield(&buf).await,
+                    Cmd::RecvBlock(piece_index, block_offset, buf) => {
+                        self.recv_block(piece_index, block_offset, &buf).await
+                    }
+                }
+            }
+
+            if !self._full() && !self.peer_state_ref.get_handle().await.0 {
+                if let Some(piece_index) = self.requests_queue.pop_front() {
+                    self.request_piece(piece_index).await;
                 }
             }
         }
     }
+}
+
+#[derive(Debug)]
+pub enum Cmd {
+    EnqBitfield(Vec<u8>),
+    EnqPiece(u32),
+    RecvBlock(u32, u32, Vec<u8>),
 }

@@ -2,13 +2,13 @@
 // todo: implement block pipelining (from bep 3) | priority: low
 
 use futures::future::join_all;
-use std::sync::Arc;
-// use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 
 use crate::peer::*;
 use crate::{concurrency::SharedRef, metadata::Metadata};
-use msg::MessageHandler;
 use piece::PieceHandler;
+
+use msg::{Message, RecvHandler, SendHandler};
 
 mod bitfield;
 mod msg;
@@ -40,26 +40,24 @@ impl PeerHandler {
     }
 
     pub async fn run(self: &mut Self, metadata: &Metadata, client_id: &PeerId) {
-        let stream = SharedRef::new(self.peer.connect().await.unwrap());
+        let mut stream = self.peer.connect().await.unwrap();
         let handshake_payload = self._handshake_payload(&metadata.get_info_hash(), client_id);
-        self.peer
-            .handshake(&handshake_payload, stream.clone())
-            .await;
+        self.peer.handshake(&handshake_payload, &mut stream).await;
 
-        let piece_handler: Arc<PieceHandler> = Arc::new(PieceHandler::new(&metadata).await);
-        let msg_handler: Arc<MessageHandler> = Arc::new(MessageHandler::new(&stream));
+        let (read_half, write_half) = stream.into_split();
+
+        let (msg_tx, msg_rx) = mpsc::channel(40);
+        let (ph_tx, ph_rx) = mpsc::channel(40);
+        let piece_handler = PieceHandler::new(&metadata, &self.state, msg_tx.clone(), ph_rx).await;
+        let recv_handler = RecvHandler::new(read_half);
+        let send_handler = SendHandler::new(write_half);
 
         let mut handles = vec![];
-        MessageHandler::send(msg_handler.clone(), 1, Some(2)).await;
-        handles.push(tokio::spawn(MessageHandler::keep_alive(
-            msg_handler.clone(),
-        )));
-        handles.push(tokio::spawn(
-            msg_handler.recv_loop(self.state.clone(), Arc::clone(&piece_handler)),
-        ));
-        handles.push(tokio::spawn(
-            piece_handler.request_loop(stream.clone(), self.state.clone()),
-        ));
+
+        handles.push(tokio::spawn(send_handler.run(msg_rx)));
+        let _ = msg_tx.send(Message::Interested).await;
+        handles.push(tokio::spawn(recv_handler.run(self.state.clone(), ph_tx)));
+        handles.push(tokio::spawn(piece_handler.run()));
 
         join_all(handles).await;
     }

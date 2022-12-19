@@ -10,7 +10,7 @@ use tokio::{
     net::TcpStream,
 };
 
-use crate::{common, concurrency::SharedRef};
+use crate::common;
 
 #[derive(Debug, PartialEq)]
 pub struct PeerId {
@@ -101,8 +101,7 @@ impl Peer {
         Ok(received[received.len() - 20..].try_into().unwrap())
     }
 
-    pub async fn handshake(self: &mut Self, payload: &[u8; 68], stream_ref: SharedRef<TcpStream>) {
-        let mut stream = stream_ref.get_handle().await;
+    pub async fn handshake(self: &mut Self, payload: &[u8; 68], stream: &mut TcpStream) {
         let _ = stream.write(payload).await;
 
         let mut buf = [0u8; 68];
