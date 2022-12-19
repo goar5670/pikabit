@@ -1,14 +1,17 @@
+use futures::future::join_all;
 use log::info;
 use serde_bencode;
-use std::{error::Error, fs};
+use std::{error::Error, fs, sync::Arc};
+use tokio::sync::mpsc;
 
+use crate::file::FileHandler;
 use crate::metadata::Metadata;
 use crate::peer::*;
 use crate::peer_protocol::PeerHandler;
 use crate::tracker_protocol::http::{Event, Request, Response};
 
 pub struct Client {
-    peer_id: PeerId,
+    peer_id: Arc<PeerId>,
     torrent: Metadata,
     port: u16,
     left: u64,
@@ -23,7 +26,7 @@ impl Client {
         let left = torrent.info.length();
 
         Self {
-            peer_id: PeerId::new(),
+            peer_id: Arc::new(PeerId::new()),
             torrent,
             port: match port {
                 Some(p) => p,
@@ -36,7 +39,7 @@ impl Client {
     fn tracker_start_request(self: &Self) -> Request {
         Request::new(
             self.torrent.get_tracker_url(),
-            self.torrent.get_info_hash(),
+            self.torrent.info.hash(),
             self.peer_id.to_string(),
             self.port,
             0,
@@ -82,7 +85,19 @@ impl Client {
         let peers = self.request_peers().await.unwrap();
         info!("number of peers {}", peers.len());
 
-        let mut peer_handler = PeerHandler::new(Peer::from(peers[1]));
-        peer_handler.run(&self.torrent, &self.peer_id).await;
+        let (tx, rx) = mpsc::channel(40);
+        let file_handler = FileHandler::new(&self.torrent.info.filename(), rx).await;
+        let peer_handler = PeerHandler::new(
+            Peer::from(peers[3]),
+            tx,
+            self.torrent.info.clone(),
+            self.peer_id.clone(),
+        );
+        let mut handles = vec![];
+
+        handles.push(tokio::spawn(file_handler.run()));
+        handles.push(tokio::spawn(peer_handler.run()));
+
+        join_all(handles).await;
     }
 }

@@ -1,4 +1,4 @@
-use log::{debug, trace};
+use log::{debug, error};
 use sha1::{Digest, Sha1};
 use std::{
     cmp,
@@ -13,8 +13,8 @@ use tokio::{
 use super::bitfield::Bitfield;
 use super::msg::*;
 use crate::concurrency::SharedRef;
-use crate::file::FileHandler;
-use crate::metadata::{Info, Metadata};
+use crate::file;
+use crate::metadata::Info;
 use crate::peer;
 
 struct Piece {
@@ -63,28 +63,31 @@ impl Piece {
         self.hash == piece_hash
     }
 
-    async fn save(
-        self: &Self,
-        offset: u64,
-        file_handler: SharedRef<FileHandler>,
-    ) -> Result<(), &'static str> {
+    async fn save(self: &Self, offset: u64, fh_tx: &Sender<file::Cmd>) -> Result<(), &'static str> {
         if self.mask.rem() > 0 {
             Err("Piece is not fully downloaded yet")
         } else if !self.verify_hash() {
             Err("Piece hash verification failed")
         } else {
-            file_handler
-                .get_handle()
+            match fh_tx
+                .send(file::Cmd::WritePiece(offset, self.bytes.clone()))
                 .await
-                .write_piece(offset, &self.bytes)
-                .await;
-            debug!(
-                "Piece {} wrote to disk, offset: {}, size: {}",
-                self.index,
-                offset,
-                self.bytes.len()
-            );
-            Ok(())
+            {
+                Ok(_) => {
+                    debug!(
+                        "Piece {} wrote to disk, offset: {}, size: {}",
+                        self.index,
+                        offset,
+                        self.bytes.len()
+                    );
+
+                    return Ok(());
+                }
+                Err(e) => {
+                    error!("{:?}", e);
+                    return Err("Could not write piece to disk");
+                }
+            }
         }
     }
 
@@ -107,28 +110,27 @@ impl Piece {
 pub struct PieceHandler {
     requests_queue: VecDeque<u32>,
     info: Arc<Info>,
-    file_handler: SharedRef<FileHandler>,
     downloaded_pieces: Bitfield,
     requested_pieces: HashMap<u32, Piece>,
     requests_cap: u32,
     block_size: u32,
     peer_state_ref: SharedRef<peer::State>,
+    fh_tx: Sender<file::Cmd>,
     msg_tx: Sender<Message>,
     own_rx: Receiver<Cmd>,
 }
 
 impl PieceHandler {
-    pub async fn new(
-        metadata: &Metadata,
+    pub fn new(
+        info: Arc<Info>,
         peer_state_ref: &SharedRef<peer::State>,
+        fh_tx: Sender<file::Cmd>,
         msg_tx: Sender<Message>,
         own_rx: Receiver<Cmd>,
     ) -> Self {
-        let info = Arc::clone(&metadata.info);
-
         Self {
             requests_queue: VecDeque::new(),
-            file_handler: SharedRef::new(FileHandler::new(&info.filename()).await),
+            fh_tx,
             downloaded_pieces: Bitfield::new(info.num_pieces()),
             requested_pieces: HashMap::new(),
             info,
@@ -183,7 +185,7 @@ impl PieceHandler {
         let piece = self.requested_pieces.get_mut(&piece_index).unwrap();
         let rem = piece.recv_block(block_offset, block);
         if rem == 0 {
-            piece.save(offset, self.file_handler.clone()).await.unwrap();
+            piece.save(offset, &self.fh_tx).await.unwrap();
             self.requested_pieces.remove(&piece_index);
             self.downloaded_pieces.set(piece_index);
         }

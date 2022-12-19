@@ -76,6 +76,13 @@ impl Info {
     pub fn filename(self: &Self) -> &String {
         &self.name
     }
+
+    pub fn hash(self: &Self) -> [u8; 20] {
+        let bencoded = serde_bencode::to_bytes(&self).unwrap();
+        let info_hash = Sha1::digest(&bencoded);
+
+        info_hash.into()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,13 +108,6 @@ pub struct Metadata {
 }
 
 impl Metadata {
-    pub fn get_info_hash(self: &Self) -> [u8; 20] {
-        let bencoded = serde_bencode::to_bytes(&self.info).unwrap();
-        let info_hash = Sha1::digest(&bencoded);
-
-        info_hash.into()
-    }
-
     pub fn get_tracker_url(self: &Self) -> String {
         self.announce.clone()
     }
@@ -129,7 +129,7 @@ mod test {
         let file: Vec<u8> = fs::read(TORRENT_FILENAME).unwrap();
         let torrent: Metadata = serde_bencode::from_bytes(&file).unwrap();
 
-        let info_hash = torrent.get_info_hash();
+        let info_hash = torrent.info.hash();
         debug_assert_eq!(
             hex::encode(info_hash),
             constants::torrents::FREE_BSD_INFO_HASH
