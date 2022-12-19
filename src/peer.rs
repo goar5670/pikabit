@@ -6,11 +6,13 @@ use std::{
     net::{Ipv4Addr, SocketAddr},
 };
 use tokio::{
-    io::{self, AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
+    time::timeout,
 };
 
 use crate::common;
+use crate::constants::timeouts;
 
 #[derive(Debug, PartialEq)]
 pub struct PeerId {
@@ -70,8 +72,12 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub async fn connect(self: &Self) -> io::Result<TcpStream> {
-        TcpStream::connect(&self.address).await
+    pub async fn connect(self: &Self) -> Result<TcpStream, String> {
+        timeout(timeouts::PEER_CONNECTION, TcpStream::connect(&self.address))
+            .await
+            .map_err(|_| format!("connection timed out, {:?}", timeouts::PEER_CONNECTION))
+            .unwrap()
+            .map_err(|e| format!("{:?}", e))
     }
 
     fn _verify_handshake(

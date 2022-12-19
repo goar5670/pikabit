@@ -16,3 +16,9 @@ pub mod message_ids {
     pub const PIECE: u8 = 7;
     pub const CANCEL: u8 = 8;
 }
+
+pub mod timeouts {
+    use tokio::time::Duration;
+
+    pub const PEER_CONNECTION: Duration = Duration::from_secs(50);
+}
