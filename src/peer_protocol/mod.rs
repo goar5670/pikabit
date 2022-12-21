@@ -7,7 +7,7 @@ use tokio::sync::mpsc::{self, Sender};
 
 use crate::file;
 use crate::peer::*;
-use crate::{concurrency::SharedRef, metadata::Info};
+use crate::{concurrency::SharedRw, metadata::Info};
 use msg::{Message, RecvHandler, SendHandler};
 use piece::PieceHandler;
 
@@ -18,7 +18,7 @@ mod piece;
 pub struct PeerHandler {
     peer: Peer,
     // (am_choked, am_interested, peer_choked, peer_interested)
-    state: SharedRef<State>,
+    state: SharedRw<State>,
     fh_tx: Sender<file::Cmd>,
     client_id: Arc<PeerId>,
     info: Arc<Info>,
@@ -33,7 +33,7 @@ impl PeerHandler {
     ) -> Self {
         Self {
             peer,
-            state: SharedRef::new((true, false, true, false)),
+            state: SharedRw::new((true, false, true, false)),
             fh_tx,
             client_id,
             info,

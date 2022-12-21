@@ -12,7 +12,7 @@ use tokio::{
 
 use super::bitfield::Bitfield;
 use super::msg::*;
-use crate::concurrency::SharedRef;
+use crate::concurrency::SharedRw;
 use crate::file;
 use crate::metadata::Info;
 use crate::peer;
@@ -114,7 +114,7 @@ pub struct PieceHandler {
     requested_pieces: HashMap<u32, Piece>,
     requests_cap: u32,
     block_size: u32,
-    peer_state_ref: SharedRef<peer::State>,
+    peer_state_ref: SharedRw<peer::State>,
     fh_tx: Sender<file::Cmd>,
     msg_tx: Sender<Message>,
     own_rx: Receiver<Cmd>,
@@ -123,7 +123,7 @@ pub struct PieceHandler {
 impl PieceHandler {
     pub fn new(
         info: Arc<Info>,
-        peer_state_ref: &SharedRef<peer::State>,
+        peer_state_ref: &SharedRw<peer::State>,
         fh_tx: Sender<file::Cmd>,
         msg_tx: Sender<Message>,
         own_rx: Receiver<Cmd>,
@@ -203,7 +203,7 @@ impl PieceHandler {
                 }
             }
 
-            if !self._full() && !self.peer_state_ref.get_handle().await.0 {
+            if !self._full() && !self.peer_state_ref.get().await.0 {
                 if let Some(piece_index) = self.requests_queue.pop_front() {
                     self.request_piece(piece_index).await;
                 }

@@ -9,7 +9,7 @@ use byteorder::{BigEndian, ByteOrder};
 use log::{error, info, trace, warn};
 
 use super::piece::Cmd;
-use crate::concurrency::SharedRef;
+use crate::concurrency::SharedRw;
 use crate::constants::message_ids::*;
 use crate::peer::State;
 
@@ -89,7 +89,7 @@ impl RecvHandler {
         return n == buf.len();
     }
 
-    pub async fn run(mut self, peer_state_ref: SharedRef<State>, piece_handler_tx: Sender<Cmd>) {
+    pub async fn run(mut self, peer_state_ref: SharedRw<State>, piece_handler_tx: Sender<Cmd>) {
         loop {
             let n: u32 = self._recv_len().await;
             if n == 0 {
@@ -104,12 +104,12 @@ impl RecvHandler {
             let message_id = buf[0];
             match message_id {
                 CHOKE => {
-                    peer_state_ref.get_handle().await.0 = true;
+                    peer_state_ref.get_mut().await.0 = true;
                     info!("choked");
                 }
 
                 UNCHOKE => {
-                    peer_state_ref.get_handle().await.0 = false;
+                    peer_state_ref.get_mut().await.0 = false;
                     info!("unchoked");
                 }
 
