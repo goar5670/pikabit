@@ -13,7 +13,7 @@ use tokio::{
 
 use super::bitfield::Bitfield;
 use super::msg::*;
-use crate::concurrency::SharedRw;
+use crate::conc::SharedRw;
 use crate::file;
 use crate::metadata::Info;
 use crate::peer;

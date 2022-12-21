@@ -1,6 +1,6 @@
 pub mod client;
 pub mod common;
-pub mod concurrency;
+pub mod conc;
 pub mod constants;
 pub mod file;
 pub mod metadata;

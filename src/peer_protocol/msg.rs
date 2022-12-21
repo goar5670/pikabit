@@ -10,7 +10,7 @@ use byteorder::{BigEndian, ByteOrder};
 use log::{error, info, trace, warn};
 
 use super::piece::Cmd;
-use crate::concurrency::SharedRw;
+use crate::conc::SharedRw;
 use crate::constants::message_ids::*;
 use crate::peer::State;
 

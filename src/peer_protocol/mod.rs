@@ -10,7 +10,7 @@ use tokio::{
 
 use crate::file;
 use crate::peer::*;
-use crate::{concurrency::SharedRw, metadata::Info};
+use crate::{conc::SharedRw, metadata::Info};
 use msg::{Message, RecvHandler, SendHandler};
 use piece::PieceHandler;
 
