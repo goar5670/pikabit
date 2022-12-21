@@ -12,7 +12,7 @@ use tokio::{
 };
 
 use crate::common;
-use crate::constants::timeouts;
+use crate::constants::{timeouts, CLIENT_PREFIX, CLIENT_VERSION};
 
 #[derive(Debug, PartialEq)]
 pub struct PeerId {
@@ -22,9 +22,6 @@ pub struct PeerId {
 impl PeerId {
     pub fn new() -> Self {
         let timestamp = common::get_timestamp();
-
-        const CLIENT_PREFIX: &'static str = "-pB";
-        const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
         let cur_len = cmp::min(
             19,
