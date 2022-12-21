@@ -2,7 +2,6 @@ use futures::future::join_all;
 use log::info;
 use serde_bencode;
 use std::{error::Error, fs, sync::Arc};
-use tokio::sync::mpsc;
 
 use crate::file::FileHandler;
 use crate::metadata::Metadata;
@@ -85,19 +84,14 @@ impl Client {
         let peers = self.request_peers().await.unwrap();
         info!("number of peers {}", peers.len());
 
-        let (tx, rx) = mpsc::channel(40);
-        let file_handler = FileHandler::new(&self.torrent.info.filename(), rx).await;
-        let peer_handler = PeerHandler::new(
+        let (fh_tx, fh_handle) = FileHandler::new(&self.torrent.info.filename()).await;
+        let (_, ph_handle) = PeerHandler::new(
             Peer::from(peers[3]),
-            tx,
+            fh_tx,
             self.torrent.info.clone(),
             self.peer_id.clone(),
         );
-        let mut handles = vec![];
 
-        handles.push(tokio::spawn(file_handler.run()));
-        handles.push(tokio::spawn(peer_handler.run()));
-
-        join_all(handles).await;
+        join_all(vec![fh_handle, ph_handle]).await;
     }
 }

@@ -1,18 +1,17 @@
 use tokio::{
     fs::{File, OpenOptions},
     io::{AsyncSeekExt, AsyncWriteExt, SeekFrom},
-    sync::mpsc::Receiver,
+    sync::mpsc::{self, Receiver, Sender},
+    task::JoinHandle,
 };
 
 pub struct FileHandler {
-    own_rx: Receiver<Cmd>,
     file: File,
 }
 
 impl FileHandler {
-    pub async fn new(filename: &str, own_rx: Receiver<Cmd>) -> Self {
-        Self {
-            own_rx,
+    pub async fn new(filename: &str) -> (Sender<Cmd>, JoinHandle<()>) {
+        let mut handler = Self {
             file: OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -20,20 +19,23 @@ impl FileHandler {
                 .open("resources/".to_owned() + filename)
                 .await
                 .unwrap(),
-        }
+        };
+        let (tx, mut rx): (Sender<Cmd>, Receiver<Cmd>) = mpsc::channel(40);
+
+        let join_handle = tokio::spawn(async move {
+            while let Some(cmd) = rx.recv().await {
+                match cmd {
+                    Cmd::WritePiece(offset, piece) => handler.write_piece(offset, &piece).await,
+                }
+            }
+        });
+
+        (tx, join_handle)
     }
 
-    pub async fn write_piece(self: &mut Self, offset: u64, piece: &[u8]) {
+    async fn write_piece(self: &mut Self, offset: u64, piece: &[u8]) {
         self.file.seek(SeekFrom::Start(offset)).await.unwrap();
         self.file.write(piece).await.unwrap();
-    }
-
-    pub async fn run(mut self) {
-        while let Some(cmd) = self.own_rx.recv().await {
-            match cmd {
-                Cmd::WritePiece(offset, piece) => self.write_piece(offset, &piece).await,
-            }
-        }
     }
 }
 

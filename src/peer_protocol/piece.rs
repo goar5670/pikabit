@@ -6,7 +6,8 @@ use std::{
     sync::Arc,
 };
 use tokio::{
-    sync::mpsc::{Receiver, Sender},
+    sync::mpsc::{self, Receiver, Sender},
+    task::JoinHandle,
     time::{sleep, Duration},
 };
 
@@ -117,29 +118,50 @@ pub struct PieceHandler {
     peer_state_ref: SharedRw<peer::State>,
     fh_tx: Sender<file::Cmd>,
     msg_tx: Sender<Message>,
-    own_rx: Receiver<Cmd>,
 }
 
 impl PieceHandler {
     pub fn new(
         info: Arc<Info>,
-        peer_state_ref: &SharedRw<peer::State>,
+        peer_state_ref: SharedRw<peer::State>,
         fh_tx: Sender<file::Cmd>,
         msg_tx: Sender<Message>,
-        own_rx: Receiver<Cmd>,
-    ) -> Self {
-        Self {
+    ) -> (Sender<Cmd>, JoinHandle<()>) {
+        let mut handler = Self {
             requests_queue: VecDeque::new(),
-            fh_tx,
             downloaded_pieces: Bitfield::new(info.num_pieces()),
             requested_pieces: HashMap::new(),
             info,
-            requests_cap: 1,
+            requests_cap: 4,
             block_size: 16 * 1024,
-            peer_state_ref: peer_state_ref.clone(),
+            peer_state_ref,
+            fh_tx,
             msg_tx,
-            own_rx,
-        }
+        };
+
+        let (tx, mut rx): (Sender<Cmd>, Receiver<Cmd>) = mpsc::channel(40);
+
+        let join_handle = tokio::spawn(async move {
+            while handler.downloaded_pieces.rem() > 0 {
+                if let Ok(msg) = rx.try_recv() {
+                    match msg {
+                        Cmd::EnqPiece(index) => handler.enqueue_piece(index),
+                        Cmd::EnqBitfield(buf) => handler.enqueue_bitfield(&buf).await,
+                        Cmd::RecvBlock(piece_index, block_offset, buf) => {
+                            handler.recv_block(piece_index, block_offset, &buf).await
+                        }
+                    }
+                }
+
+                if !handler._full() && !handler.peer_state_ref.get().await.0 {
+                    if let Some(piece_index) = handler.requests_queue.pop_front() {
+                        handler.request_piece(piece_index).await;
+                    }
+                }
+            }
+        });
+
+        (tx, join_handle)
     }
 
     fn _full(self: &Self) -> bool {
@@ -188,26 +210,6 @@ impl PieceHandler {
             piece.save(offset, &self.fh_tx).await.unwrap();
             self.requested_pieces.remove(&piece_index);
             self.downloaded_pieces.set(piece_index);
-        }
-    }
-
-    pub async fn run(mut self) {
-        while self.downloaded_pieces.rem() > 0 {
-            if let Ok(msg) = self.own_rx.try_recv() {
-                match msg {
-                    Cmd::EnqPiece(index) => self.enqueue_piece(index),
-                    Cmd::EnqBitfield(buf) => self.enqueue_bitfield(&buf).await,
-                    Cmd::RecvBlock(piece_index, block_offset, buf) => {
-                        self.recv_block(piece_index, block_offset, &buf).await
-                    }
-                }
-            }
-
-            if !self._full() && !self.peer_state_ref.get().await.0 {
-                if let Some(piece_index) = self.requests_queue.pop_front() {
-                    self.request_piece(piece_index).await;
-                }
-            }
         }
     }
 }

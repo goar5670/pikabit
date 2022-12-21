@@ -1,7 +1,8 @@
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::tcp,
-    sync::mpsc::{Receiver, Sender},
+    sync::mpsc::{self, Receiver, Sender},
+    task::JoinHandle,
     time::{self, Duration},
 };
 
@@ -64,8 +65,68 @@ pub struct RecvHandler {
 }
 
 impl RecvHandler {
-    pub fn new(read_half: tcp::OwnedReadHalf) -> Self {
-        Self { read_half }
+    pub fn new(
+        read_half: tcp::OwnedReadHalf,
+        peer_state_ref: SharedRw<State>,
+        ph_tx: Sender<Cmd>,
+    ) -> JoinHandle<()> {
+        let mut handler = Self { read_half };
+
+        let join_handle = tokio::spawn(async move {
+            loop {
+                let n: u32 = handler._recv_len().await;
+                if n == 0 {
+                    continue;
+                }
+
+                let mut buf: Vec<u8> = vec![0; n as usize];
+                if !handler._recv(&mut buf).await {
+                    return;
+                }
+
+                let message_id = buf[0];
+                match message_id {
+                    CHOKE => {
+                        peer_state_ref.get_mut().await.0 = true;
+                        info!("choked");
+                    }
+
+                    UNCHOKE => {
+                        peer_state_ref.get_mut().await.0 = false;
+                        info!("unchoked");
+                    }
+
+                    HAVE => {
+                        let _ = ph_tx
+                            .send(Cmd::EnqPiece(BigEndian::read_u32(&buf[1..])))
+                            .await;
+                    }
+
+                    BITFIELD => {
+                        trace!("Bitfield {:?}", &buf[1..]);
+                        let _ = ph_tx.send(Cmd::EnqBitfield(buf[1..].to_vec())).await;
+                    }
+
+                    PIECE => {
+                        let piece_index = BigEndian::read_u32(&buf[1..5]);
+                        let block_offset = BigEndian::read_u32(&buf[5..9]);
+                        let block = buf[9..].to_vec();
+                        trace!("received block {} {}", piece_index, block_offset);
+                        let _ = ph_tx
+                            .send(Cmd::RecvBlock(piece_index, block_offset, block))
+                            .await;
+                    }
+
+                    CANCEL => {
+                        warn!("canceled piece");
+                    }
+
+                    _ => {}
+                }
+            }
+        });
+
+        join_handle
     }
 
     async fn _recv_len(&mut self) -> u32 {
@@ -88,62 +149,6 @@ impl RecvHandler {
 
         return n == buf.len();
     }
-
-    pub async fn run(mut self, peer_state_ref: SharedRw<State>, piece_handler_tx: Sender<Cmd>) {
-        loop {
-            let n: u32 = self._recv_len().await;
-            if n == 0 {
-                continue;
-            }
-
-            let mut buf: Vec<u8> = vec![0; n as usize];
-            if !self._recv(&mut buf).await {
-                return;
-            }
-
-            let message_id = buf[0];
-            match message_id {
-                CHOKE => {
-                    peer_state_ref.get_mut().await.0 = true;
-                    info!("choked");
-                }
-
-                UNCHOKE => {
-                    peer_state_ref.get_mut().await.0 = false;
-                    info!("unchoked");
-                }
-
-                HAVE => {
-                    let _ = piece_handler_tx
-                        .send(Cmd::EnqPiece(BigEndian::read_u32(&buf[1..])))
-                        .await;
-                }
-
-                BITFIELD => {
-                    trace!("Bitfield {:?}", &buf[1..]);
-                    let _ = piece_handler_tx
-                        .send(Cmd::EnqBitfield(buf[1..].to_vec()))
-                        .await;
-                }
-
-                PIECE => {
-                    let piece_index = BigEndian::read_u32(&buf[1..5]);
-                    let block_offset = BigEndian::read_u32(&buf[5..9]);
-                    let block = buf[9..].to_vec();
-                    trace!("received block {} {}", piece_index, block_offset);
-                    let _ = piece_handler_tx
-                        .send(Cmd::RecvBlock(piece_index, block_offset, block))
-                        .await;
-                }
-
-                CANCEL => {
-                    warn!("canceled piece");
-                }
-
-                _ => {}
-            }
-        }
-    }
 }
 
 pub struct SendHandler {
@@ -151,8 +156,21 @@ pub struct SendHandler {
 }
 
 impl SendHandler {
-    pub fn new(write_half: tcp::OwnedWriteHalf) -> Self {
-        Self { write_half }
+    pub fn new(write_half: tcp::OwnedWriteHalf) -> (Sender<Message>, JoinHandle<()>) {
+        let mut handler = Self { write_half };
+
+        let (tx, mut rx): (Sender<Message>, Receiver<Message>) = mpsc::channel(40);
+        let join_handle = tokio::spawn(async move {
+            loop {
+                match time::timeout(Duration::from_secs(2 * 60), rx.recv()).await {
+                    Ok(Some(msg)) => msg.send(&mut handler).await,
+                    Ok(None) => return,
+                    Err(_) => handler.send(0, None, None).await,
+                }
+            }
+        });
+
+        (tx, join_handle)
     }
 
     async fn send(&mut self, length: u32, message_id: Option<u8>, payload: Option<&mut Vec<u8>>) {
@@ -170,15 +188,5 @@ impl SendHandler {
         }
 
         let _ = self.write_half.write(&mut buf).await;
-    }
-
-    pub async fn run(mut self, mut msg_rx: Receiver<Message>) {
-        loop {
-            match time::timeout(Duration::from_secs(2 * 60), msg_rx.recv()).await {
-                Ok(Some(msg)) => msg.send(&mut self).await,
-                Ok(None) => return,
-                Err(_) => self.send(0, None, None).await,
-            }
-        }
     }
 }

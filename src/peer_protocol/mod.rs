@@ -3,7 +3,10 @@
 
 use futures::future::join_all;
 use std::sync::Arc;
-use tokio::sync::mpsc::{self, Sender};
+use tokio::{
+    sync::mpsc::{self, Sender},
+    task::JoinHandle,
+};
 
 use crate::file;
 use crate::peer::*;
@@ -19,7 +22,6 @@ pub struct PeerHandler {
     peer: Peer,
     // (am_choked, am_interested, peer_choked, peer_interested)
     state: SharedRw<State>,
-    fh_tx: Sender<file::Cmd>,
     client_id: Arc<PeerId>,
     info: Arc<Info>,
 }
@@ -30,14 +32,39 @@ impl PeerHandler {
         fh_tx: Sender<file::Cmd>,
         info: Arc<Info>,
         client_id: Arc<PeerId>,
-    ) -> Self {
-        Self {
+    ) -> (Sender<String>, JoinHandle<()>) {
+        let mut handler = Self {
             peer,
             state: SharedRw::new((true, false, true, false)),
-            fh_tx,
             client_id,
             info,
-        }
+        };
+
+        let (tx, _) = mpsc::channel(40);
+
+        let join_handle = tokio::spawn(async move {
+            let mut stream = handler.peer.connect().await.unwrap();
+            handler
+                .peer
+                .handshake(&handler._handshake_payload(), &mut stream)
+                .await;
+
+            let (read_half, write_half) = stream.into_split();
+
+            let (msg_tx, sh_handle) = SendHandler::new(write_half);
+            let (ph_tx, ph_handle) = PieceHandler::new(
+                handler.info.clone(),
+                handler.state.clone(),
+                fh_tx.clone(),
+                msg_tx.clone(),
+            );
+            let rh_handle = RecvHandler::new(read_half, handler.state.clone(), ph_tx);
+            let _ = msg_tx.send(Message::Interested).await;
+
+            join_all(vec![sh_handle, ph_handle, rh_handle]).await;
+        });
+
+        (tx, join_handle)
     }
 
     fn _handshake_payload(self: &Self) -> [u8; 68] {
@@ -49,35 +76,5 @@ impl PeerHandler {
         payload[48..].copy_from_slice(self.client_id.as_bytes());
 
         payload
-    }
-
-    pub async fn run(mut self) {
-        let mut stream = self.peer.connect().await.unwrap();
-        self.peer
-            .handshake(&self._handshake_payload(), &mut stream)
-            .await;
-
-        let (read_half, write_half) = stream.into_split();
-
-        let (msg_tx, msg_rx) = mpsc::channel(40);
-        let (ph_tx, ph_rx) = mpsc::channel(40);
-        let piece_handler = PieceHandler::new(
-            self.info.clone(),
-            &self.state,
-            self.fh_tx.clone(),
-            msg_tx.clone(),
-            ph_rx,
-        );
-        let recv_handler = RecvHandler::new(read_half);
-        let send_handler = SendHandler::new(write_half);
-
-        let mut handles = vec![];
-
-        handles.push(tokio::spawn(send_handler.run(msg_rx)));
-        let _ = msg_tx.send(Message::Interested).await;
-        handles.push(tokio::spawn(recv_handler.run(self.state.clone(), ph_tx)));
-        handles.push(tokio::spawn(piece_handler.run()));
-
-        join_all(handles).await;
     }
 }
