@@ -1,20 +1,20 @@
 use futures::future::join_all;
 use log::{info, warn};
 use serde_bencode;
-use std::cmp;
 use std::{collections::HashMap, error::Error, fs};
-use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::mpsc;
 
 use crate::bitfield::*;
 use crate::conc::{SharedMut, SharedRw};
 
 use crate::metadata::Metadata;
 use crate::peer_protocol::{
+    self,
     msg::Message,
     peer::{Peer, PeerId},
     piece::{PieceBuffer, PieceTracker},
-    requests::{RequestsHandler, RequestsTracker},
-    PeerConnectionHandler, PeerTracker,
+    requests::{self, RequestsTracker},
+    PeerTracker,
 };
 use crate::tracker_protocol::http::{Event, Request, Response};
 
@@ -122,7 +122,7 @@ impl Client {
             let tx_clone = tx.clone();
 
             let pch_handle = tokio::spawn(async move {
-                match PeerConnectionHandler::new(Peer::from(peer), tx_clone, hs_payload).await {
+                match peer_protocol::spawn_prch(Peer::from(peer), tx_clone, hs_payload).await {
                     Ok((peer_id, msg_tx, pch_handle)) => {
                         let _ = msg_tx.send(Message::Interested).await;
                         let mut pr_tracker =
@@ -221,7 +221,7 @@ impl Client {
             }
         });
 
-        let rqh_handle = RequestsHandler::new(pct_clone, pr_map_clone, reqt_clone);
+        let rqh_handle = requests::spawn_reqh(pct_clone, pr_map_clone, reqt_clone);
 
         join_all(pch_handles).await;
         join_all(vec![rqh_handle, recv_handle]).await;

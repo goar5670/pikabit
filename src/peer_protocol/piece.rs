@@ -1,8 +1,6 @@
-use log::warn;
 use priority_queue::PriorityQueue;
-use std::{cmp::Reverse, collections::HashMap, sync::Arc};
+use std::{cmp::Reverse, collections::HashMap};
 
-use super::peer::PeerId;
 use crate::bitfield::{Bitfield, BitfieldOwned, BitfieldRef};
 
 pub struct Metadata {
