@@ -10,10 +10,11 @@ use crate::conc::{SharedMut, SharedRw};
 
 use crate::metadata::Metadata;
 use crate::peer_protocol::{
-    PeerConnectionHandler, PeerTracker,
     msg::Message,
     peer::{Peer, PeerId},
-    piece::{PieceBuffer, PieceTracker, RequestsTracker},
+    piece::{PieceBuffer, PieceTracker},
+    requests::{RequestsHandler, RequestsTracker},
+    PeerConnectionHandler, PeerTracker,
 };
 use crate::tracker_protocol::http::{Event, Request, Response};
 
@@ -95,23 +96,6 @@ impl Client {
         payload[48..].copy_from_slice(self.peer_id.as_bytes());
 
         payload
-    }
-
-    async fn request_piece(
-        piece_index: u32,
-        piece_length: u32,
-        block_size: u32,
-        msg_tx: &Sender<Message>,
-    ) {
-        let mut cur_offset: u32 = 0;
-
-        while cur_offset != piece_length {
-            let length = cmp::min(block_size, piece_length - cur_offset);
-            let _ = msg_tx
-                .send(Message::Request(piece_index, cur_offset, length))
-                .await;
-            cur_offset += length;
-        }
     }
 
     pub async fn run(mut self) {
@@ -237,48 +221,9 @@ impl Client {
             }
         });
 
-        let requests_handle = tokio::spawn(async move {
-            while pct_clone.get().await.rem() > 0 {
-                while pct_clone.get().await.is_empty() {}
-
-                let next_piece = pct_clone.get_mut().await.next_piece();
-                if let Some(piece_index) = next_piece {
-                    'outer: loop {
-                        for (peer_id, pr_tracker) in pr_map_clone.lock().await.iter() {
-                            if !reqt_clone.get().await.full(peer_id)
-                                && !pr_tracker.get_mut().await.state.am_choked
-                            {
-                                reqt_clone.get_mut().await.increase(peer_id.clone());
-                                let (piece_length, block_size) = async {
-                                    let lock = pct_clone.get().await;
-                                    (
-                                        lock.metadata.piece_len(piece_index),
-                                        lock.metadata.block_size(),
-                                    )
-                                }
-                                .await;
-                                Self::request_piece(
-                                    piece_index,
-                                    piece_length,
-                                    block_size,
-                                    &pr_tracker.get().await.msg_tx,
-                                )
-                                .await;
-                                info!(
-                                    "peer_id: {:?}, requested piece {}, reqt_len: {}",
-                                    peer_id,
-                                    piece_index,
-                                    reqt_clone.get().await.cnt(peer_id)
-                                );
-                                break 'outer;
-                            }
-                        }
-                    }
-                }
-            }
-        });
+        let rqh_handle = RequestsHandler::new(pct_clone, pr_map_clone, reqt_clone);
 
         join_all(pch_handles).await;
-        join_all(vec![requests_handle, recv_handle]).await;
+        join_all(vec![rqh_handle, recv_handle]).await;
     }
 }

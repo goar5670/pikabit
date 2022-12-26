@@ -164,52 +164,6 @@ impl PieceTracker {
     }
 }
 
-pub struct RequestsTracker {
-    requested: HashMap<Arc<PeerId>, u32>,
-    cap: u32,
-}
-
-impl RequestsTracker {
-    pub fn new(cap: Option<u32>) -> Self {
-        Self {
-            requested: HashMap::new(),
-            cap: cap.unwrap_or(5),
-        }
-    }
-
-    pub fn full(&self, peer_id: &Arc<PeerId>) -> bool {
-        self.cnt(peer_id) == self.cap
-    }
-
-    pub fn increase(&mut self, peer_id: Arc<PeerId>) {
-        if self.requested.contains_key(&peer_id) {
-            *self.requested.get_mut(&peer_id).unwrap() += 1;
-        } else {
-            self.requested.insert(peer_id.clone(), 1);
-        }
-    }
-
-    pub fn decrease(&mut self, peer_id: Arc<PeerId>) {
-        if self.requested.contains_key(&peer_id) {
-            let cnt = self.requested.get_mut(&peer_id).unwrap();
-            if *cnt > 0 {
-                *cnt -= 1;
-            } else {
-                warn!("Unexpected remove when cnt is 0. peer_id: {:?}", peer_id,);
-            }
-        } else {
-            warn!(
-                "Unexpected remove when requested doesn't contain peer_id. peer_id: {:?}",
-                peer_id,
-            );
-        }
-    }
-
-    pub fn cnt(&self, peer_id: &Arc<PeerId>) -> u32 {
-        self.requested.get(peer_id).copied().unwrap_or(0)
-    }
-}
-
 pub struct PieceBuffer {
     inner: HashMap<u32, Vec<u8>>,
 }

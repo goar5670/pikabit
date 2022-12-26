@@ -39,11 +39,7 @@ impl Message {
                     .send(13, Some(msg_ids::REQUEST), Some(&mut buf))
                     .await;
             }
-            Message::Interested => {
-                send_handler
-                    .send(1, Some(msg_ids::INTERESTED), None)
-                    .await
-            }
+            Message::Interested => send_handler.send(1, Some(msg_ids::INTERESTED), None).await,
             _ => {}
         }
     }

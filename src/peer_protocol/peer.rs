@@ -48,9 +48,7 @@ impl PeerId {
 
 impl From<&[u8; 20]> for PeerId {
     fn from(slice: &[u8; 20]) -> Self {
-        Self {
-            inner: *slice,
-        }
+        Self { inner: *slice }
     }
 }
 

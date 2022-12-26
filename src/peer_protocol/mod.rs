@@ -17,10 +17,11 @@ use peer::{Peer, PeerId};
 use msg::Message;
 use msg::{RecvHandler, SendHandler};
 
+pub mod file;
 pub mod msg;
 pub mod peer;
 pub mod piece;
-pub mod file;
+pub mod requests;
 
 pub struct PeerConnectionHandler {
     peer: Peer,
