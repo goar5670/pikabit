@@ -2,79 +2,115 @@
 // todo: implement block pipelining (from bep 3) | priority: low
 
 use futures::future::join_all;
+use log::{error, warn};
 use std::sync::Arc;
 use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
     sync::mpsc::{self, Sender},
     task::JoinHandle,
 };
 
-use crate::file;
-use crate::peer::*;
-use crate::{conc::SharedRw, metadata::Info};
-use msg::{Message, RecvHandler, SendHandler};
-use piece::PieceHandler;
+use crate::bitfield::*;
 
-mod bitfield;
+use crate::peer::{self, *};
+pub use msg::Message;
+use msg::{RecvHandler, SendHandler};
+
+// mod bitfield;
 mod msg;
-mod piece;
 
-pub struct PeerHandler {
+pub struct PeerConnectionHandler {
     peer: Peer,
-    // (am_choked, am_interested, peer_choked, peer_interested)
-    state: SharedRw<State>,
-    client_id: Arc<PeerId>,
-    info: Arc<Info>,
 }
 
-impl PeerHandler {
-    pub fn new(
+impl PeerConnectionHandler {
+    pub async fn new(
         peer: Peer,
-        fh_tx: Sender<file::Cmd>,
-        info: Arc<Info>,
-        client_id: Arc<PeerId>,
-    ) -> (Sender<String>, JoinHandle<()>) {
-        let mut handler = Self {
-            peer,
-            state: SharedRw::new((true, false, true, false)),
-            client_id,
-            info,
-        };
+        client_tx: Sender<RelayedMessage>,
+        handshake_payload: [u8; 68],
+    ) -> Result<(Arc<PeerId>, Sender<Message>, JoinHandle<()>), String> {
+        let mut handler = Self { peer };
 
-        let (tx, _) = mpsc::channel(40);
+        let mut stream = handler.peer.connect().await?;
+
+        let peer_id = Arc::new(Self::handshake(&handshake_payload, &mut stream).await);
+
+        handler.peer.set_id(peer_id.clone());
+
+        let (read_half, write_half) = stream.into_split();
+
+        let (tx, mut rx) = mpsc::channel(40);
+
+        let (msg_tx, sh_handle) = SendHandler::new(write_half);
+
+        let msg_tx_clone = msg_tx.clone();
+
+        let rh_handle = RecvHandler::new(read_half, tx);
 
         let join_handle = tokio::spawn(async move {
-            let mut stream = handler.peer.connect().await.unwrap();
-            handler
-                .peer
-                .handshake(&handler._handshake_payload(), &mut stream)
-                .await;
+            while let Some(msg) = rx.recv().await {
+                let _ = client_tx.send((handler.peer.get_id().unwrap(), msg)).await;
+            }
 
-            let (read_half, write_half) = stream.into_split();
-
-            let (msg_tx, sh_handle) = SendHandler::new(write_half);
-            let (ph_tx, ph_handle) = PieceHandler::new(
-                handler.info.clone(),
-                handler.state.clone(),
-                fh_tx.clone(),
-                msg_tx.clone(),
-            );
-            let rh_handle = RecvHandler::new(read_half, handler.state.clone(), ph_tx);
-            let _ = msg_tx.send(Message::Interested).await;
-
-            join_all(vec![sh_handle, ph_handle, rh_handle]).await;
+            join_all(vec![sh_handle, rh_handle]).await;
         });
 
-        (tx, join_handle)
+        Ok((peer_id, msg_tx_clone, join_handle))
     }
 
-    fn _handshake_payload(self: &Self) -> [u8; 68] {
-        let mut payload = [0u8; 68];
-        payload[0] = 19;
-        payload[1..20].copy_from_slice("BitTorrent protocol".as_bytes());
-        payload[20..28].copy_from_slice(&[0u8; 8]);
-        payload[28..48].copy_from_slice(&self.info.hash());
-        payload[48..].copy_from_slice(self.client_id.as_bytes());
+    fn verify_handshake(received: &[u8], sent: &[u8]) -> Result<[u8; 20], &'static str> {
+        if received[..20] != sent[..20] {
+            error!(
+                "Incorrect protocol name: {}",
+                String::from_utf8(received[..20].to_vec()).unwrap()
+            );
+            return Err("Incorrect protocol name");
+        } else if received[28..48] != sent[28..48] {
+            error!(
+                "Incorrect info hash: {:?}, expected: {:?}",
+                &received[28..48],
+                &sent[28..48]
+            );
+            return Err("Incorrect info hash");
+        }
 
-        payload
+        if received[20..28] != sent[20..28] {
+            warn!("Different protocol extension: {:?}", &received[20..28]);
+        }
+
+        Ok(received[received.len() - 20..].try_into().unwrap())
+    }
+
+    async fn handshake(payload: &[u8; 68], stream: &mut TcpStream) -> PeerId {
+        let _ = stream.write(payload).await;
+
+        let mut buf = [0u8; 68];
+        let _ = stream.read_exact(&mut buf).await.unwrap();
+
+        let peer_id = Self::verify_handshake(&buf, payload).unwrap();
+        PeerId::from(&peer_id)
+    }
+}
+
+pub type RelayedMessage = (Arc<PeerId>, Message);
+
+pub struct PeerTracker {
+    pub state: State,
+    pub msg_tx: Sender<Message>,
+    pub have: BitfieldOwned,
+}
+
+impl PeerTracker {
+    pub fn new(have: BitfieldOwned, msg_tx: Sender<Message>) -> Self {
+        Self {
+            state: peer::State::new(),
+            have,
+            msg_tx,
+        }
+    }
+
+    pub fn update_have(&mut self, piece_index: u32) -> u32 {
+        self.have.set(piece_index)
     }
 }

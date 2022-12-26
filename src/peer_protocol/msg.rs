@@ -1,3 +1,5 @@
+use std::cmp;
+
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::tcp,
@@ -7,56 +9,45 @@ use tokio::{
 };
 
 use byteorder::{BigEndian, ByteOrder};
-use log::{error, info, trace, warn};
+use log::{debug, error};
 
-use super::piece::Cmd;
-use crate::conc::SharedRw;
 use crate::constants::message_ids::*;
-use crate::peer::State;
 
 use crate::constants::message_ids;
 
+#[derive(PartialEq, Eq, Debug)]
 pub enum Message {
-    Request(Request),
+    Choke,
+    Unchoke,
     Interested,
+    NotInterested,
+    Have(u32),
+    Bitfield(Vec<u8>),
+    Request(u32, u32, u32),
+    Piece(u32, u32, Vec<u8>),
+    Empty,
 }
 
 impl Message {
-    pub async fn send(&self, send_handler: &mut SendHandler) {
+    pub async fn send(self, send_handler: &mut SendHandler) {
         match self {
-            Message::Request(request) => request.send(send_handler).await,
+            Message::Request(index, begin, length) => {
+                let mut buf: Vec<u8> = vec![];
+                buf.write_u32(index).await.unwrap();
+                buf.write_u32(begin).await.unwrap();
+                buf.write_u32(length).await.unwrap();
+
+                send_handler
+                    .send(13, Some(message_ids::REQUEST), Some(&mut buf))
+                    .await;
+            }
             Message::Interested => {
                 send_handler
                     .send(1, Some(message_ids::INTERESTED), None)
                     .await
             }
+            _ => {}
         }
-    }
-}
-
-pub struct Request {
-    index: u32,
-    begin: u32,
-    length: u32,
-}
-
-impl Request {
-    pub fn new(index: u32, begin: u32, length: u32) -> Self {
-        Self {
-            index,
-            begin,
-            length,
-        }
-    }
-    async fn send(&self, send_handler: &mut SendHandler) {
-        let mut buf: Vec<u8> = vec![];
-        buf.write_u32(self.index).await.unwrap();
-        buf.write_u32(self.begin).await.unwrap();
-        buf.write_u32(self.length).await.unwrap();
-
-        send_handler
-            .send(13, Some(message_ids::REQUEST), Some(&mut buf))
-            .await;
     }
 }
 
@@ -65,11 +56,7 @@ pub struct RecvHandler {
 }
 
 impl RecvHandler {
-    pub fn new(
-        read_half: tcp::OwnedReadHalf,
-        peer_state_ref: SharedRw<State>,
-        ph_tx: Sender<Cmd>,
-    ) -> JoinHandle<()> {
+    pub fn new(read_half: tcp::OwnedReadHalf, peer_tx: Sender<Message>) -> JoinHandle<()> {
         let mut handler = Self { read_half };
 
         let join_handle = tokio::spawn(async move {
@@ -84,44 +71,28 @@ impl RecvHandler {
                     return;
                 }
 
-                let message_id = buf[0];
-                match message_id {
-                    CHOKE => {
-                        peer_state_ref.get_mut().await.0 = true;
-                        info!("choked");
-                    }
+                let msg_id = buf[0];
+                debug!(
+                    "received msg id: {}, {:?}",
+                    msg_id,
+                    &buf[1..cmp::min(buf.len(), 12)]
+                );
 
-                    UNCHOKE => {
-                        peer_state_ref.get_mut().await.0 = false;
-                        info!("unchoked");
-                    }
+                let msg = match msg_id {
+                    CHOKE => Message::Choke,
+                    UNCHOKE => Message::Unchoke,
+                    HAVE => Message::Have(BigEndian::read_u32(&buf[1..])),
+                    BITFIELD => Message::Bitfield(buf[1..].to_vec()),
+                    PIECE => Message::Piece(
+                        BigEndian::read_u32(&buf[1..5]),
+                        BigEndian::read_u32(&buf[5..9]),
+                        buf[9..].to_vec(),
+                    ),
+                    _ => Message::Empty,
+                };
 
-                    HAVE => {
-                        let _ = ph_tx
-                            .send(Cmd::EnqPiece(BigEndian::read_u32(&buf[1..])))
-                            .await;
-                    }
-
-                    BITFIELD => {
-                        trace!("Bitfield {:?}", &buf[1..]);
-                        let _ = ph_tx.send(Cmd::EnqBitfield(buf[1..].to_vec())).await;
-                    }
-
-                    PIECE => {
-                        let piece_index = BigEndian::read_u32(&buf[1..5]);
-                        let block_offset = BigEndian::read_u32(&buf[5..9]);
-                        let block = buf[9..].to_vec();
-                        trace!("received block {} {}", piece_index, block_offset);
-                        let _ = ph_tx
-                            .send(Cmd::RecvBlock(piece_index, block_offset, block))
-                            .await;
-                    }
-
-                    CANCEL => {
-                        warn!("canceled piece");
-                    }
-
-                    _ => {}
+                if msg != Message::Empty {
+                    let _ = peer_tx.send(msg).await;
                 }
             }
         });
@@ -174,7 +145,7 @@ impl SendHandler {
     }
 
     async fn send(&mut self, length: u32, message_id: Option<u8>, payload: Option<&mut Vec<u8>>) {
-        trace!("send message {} {:?} {:?}", length, message_id, &payload);
+        debug!("send message {} {:?} {:?}", length, message_id, &payload);
 
         let mut buf: Vec<u8> = vec![];
         buf.write_u32(length).await.unwrap();

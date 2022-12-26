@@ -1,20 +1,18 @@
 use byteorder::{BigEndian, ByteOrder};
-use log::{error, info, warn};
+
 use rand::{distributions::Alphanumeric, Rng};
 use std::{
     cmp,
+    fmt::Debug,
     net::{Ipv4Addr, SocketAddr},
+    sync::Arc,
 };
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-    time::timeout,
-};
+use tokio::{net::TcpStream, time::timeout};
 
 use crate::common;
 use crate::constants::{timeouts, CLIENT_PREFIX, CLIENT_VERSION};
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq, Eq, Hash)]
 pub struct PeerId {
     inner: [u8; 20],
 }
@@ -62,61 +60,37 @@ impl ToString for PeerId {
     }
 }
 
+impl Debug for PeerId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let id_str = String::from_utf8(self.inner.to_vec())
+            .unwrap_or(String::from_utf8(PeerId::new().inner.to_vec()).unwrap());
+        id_str.fmt(f)
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct Peer {
     address: SocketAddr,
-    id: Option<PeerId>,
+    id: Option<Arc<PeerId>>,
 }
 
 impl Peer {
     pub async fn connect(self: &Self) -> Result<TcpStream, String> {
-        timeout(timeouts::PEER_CONNECTION, TcpStream::connect(&self.address))
-            .await
-            .map_err(|_| format!("connection timed out, {:?}", timeouts::PEER_CONNECTION))
-            .unwrap()
-            .map_err(|e| format!("{:?}", e))
+        match timeout(timeouts::PEER_CONNECTION, TcpStream::connect(&self.address)).await {
+            Ok(r) => r.map_err(|e| format!("{:?}", e)),
+            Err(_) => Err(format!(
+                "connection timed out, {:?}",
+                timeouts::PEER_CONNECTION
+            )),
+        }
     }
 
-    fn _verify_handshake(
-        self: &Self,
-        received: &[u8],
-        sent: &[u8],
-    ) -> Result<[u8; 20], &'static str> {
-        if received[..20] != sent[..20] {
-            error!(
-                "Incorrect protocol name: {}",
-                String::from_utf8(received[..20].to_vec()).unwrap()
-            );
-            return Err("Incorrect protocol name");
-        } else if received[28..48] != sent[28..48] {
-            error!(
-                "Incorrect info hash: {:?}, expected: {:?}",
-                &received[28..48],
-                &sent[28..48]
-            );
-            return Err("Incorrect info hash");
-        }
-
-        if received[20..28] != sent[20..28] {
-            warn!("Different protocol extension: {:?}", &received[20..28]);
-        }
-
-        Ok(received[received.len() - 20..].try_into().unwrap())
+    pub fn set_id(&mut self, id: Arc<PeerId>) {
+        self.id = Some(id);
     }
 
-    pub async fn handshake(self: &mut Self, payload: &[u8; 68], stream: &mut TcpStream) {
-        let _ = stream.write(payload).await;
-
-        let mut buf = [0u8; 68];
-        let n = stream.read_exact(&mut buf).await.unwrap();
-
-        if n != payload.len() {
-            warn!("Unexpected buffer length {}, expected {}", n, payload.len());
-        }
-
-        let peer_id = self._verify_handshake(&buf, payload).unwrap();
-        info!("peer id: {}", String::from_utf8(peer_id.to_vec()).unwrap());
-        self.id = Some(PeerId::from(&peer_id));
+    pub fn get_id(&self) -> Option<Arc<PeerId>> {
+        self.id.as_ref().map(|id| id.clone())
     }
 }
 
@@ -132,7 +106,23 @@ impl From<[u8; 6]> for Peer {
     }
 }
 
-pub type State = (bool, bool, bool, bool);
+pub struct State {
+    pub am_choked: bool,
+    pub am_interested: bool,
+    pub peer_choked: bool,
+    pub peer_interested: bool,
+}
+
+impl State {
+    pub fn new() -> Self {
+        Self {
+            am_choked: true,
+            am_interested: false,
+            peer_choked: true,
+            peer_interested: false,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

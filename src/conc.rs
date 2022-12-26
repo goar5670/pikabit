@@ -20,7 +20,7 @@ impl<T> SharedMut<T> {
         }
     }
 
-    pub async fn get_handle(self: &Self) -> MutexGuard<'_, T> {
+    pub async fn lock(self: &Self) -> MutexGuard<'_, T> {
         self.inner.lock().await
     }
 }

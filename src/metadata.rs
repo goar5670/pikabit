@@ -55,7 +55,7 @@ impl Info {
         self.piece_length
     }
 
-    pub fn length(self: &Self) -> u64 {
+    pub fn len(self: &Self) -> u64 {
         self.length.unwrap()
     }
 

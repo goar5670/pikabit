@@ -20,7 +20,7 @@ pub mod message_ids {
 pub mod timeouts {
     use tokio::time::Duration;
 
-    pub const PEER_CONNECTION: Duration = Duration::from_secs(50);
+    pub const PEER_CONNECTION: Duration = Duration::from_secs(60);
 }
 
 pub const CLIENT_PREFIX: &'static str = "-pB";
