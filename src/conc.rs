@@ -6,7 +6,7 @@ pub struct SharedMut<T> {
 }
 
 impl<T> Clone for SharedMut<T> {
-    fn clone(self: &Self) -> Self {
+    fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
         }
@@ -20,7 +20,7 @@ impl<T> SharedMut<T> {
         }
     }
 
-    pub async fn lock(self: &Self) -> MutexGuard<'_, T> {
+    pub async fn lock(&self) -> MutexGuard<'_, T> {
         self.inner.lock().await
     }
 }

@@ -73,7 +73,7 @@ pub mod http {
                 tracker_id,
             }
         }
-        pub async fn get(self: &Self) -> Vec<u8> {
+        pub async fn get(&self) -> Vec<u8> {
             let encoded_info_hash = urlencoding::encode_binary(&self.info_hash);
             let url = format!(
                 "{}?info_hash={}&{}",
@@ -109,7 +109,7 @@ pub mod http {
     }
 
     impl Response {
-        pub fn get_peers(self: &Self) -> Vec<[u8; 6]> {
+        pub fn get_peers(&self) -> Vec<[u8; 6]> {
             self.peers
                 .chunks(6)
                 .map(|chunck| chunck.try_into().unwrap())

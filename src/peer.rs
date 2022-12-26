@@ -55,7 +55,7 @@ impl From<&[u8; 20]> for PeerId {
 }
 
 impl ToString for PeerId {
-    fn to_string(self: &Self) -> String {
+    fn to_string(&self) -> String {
         String::from_utf8(self.inner.to_vec()).unwrap()
     }
 }
@@ -75,7 +75,7 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub async fn connect(self: &Self) -> Result<TcpStream, String> {
+    pub async fn connect(&self) -> Result<TcpStream, String> {
         match timeout(timeouts::PEER_CONNECTION, TcpStream::connect(&self.address)).await {
             Ok(r) => r.map_err(|e| format!("{:?}", e)),
             Err(_) => Err(format!(

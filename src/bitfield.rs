@@ -46,7 +46,7 @@ impl Bitfield for BitfieldRef<'_> {
         self.cnt_marked
     }
 
-    fn get(self: &Self, index: u32) -> Option<bool> {
+    fn get(&self, index: u32) -> Option<bool> {
         if index >= self.len() {
             return None;
         }
@@ -78,7 +78,7 @@ impl Bitfield for BitfieldOwned {
         self.cnt_marked
     }
 
-    fn get(self: &Self, index: u32) -> Option<bool> {
+    fn get(&self, index: u32) -> Option<bool> {
         if index >= self.len() {
             return None;
         }
@@ -100,7 +100,7 @@ impl BitfieldOwned {
         }
     }
 
-    pub fn set(self: &mut Self, index: u32) -> u32 {
+    pub fn set(&mut self, index: u32) -> u32 {
         if index >= self.len() {
             panic!("Requested index {} is out of bounds {}", index, self.len());
         }

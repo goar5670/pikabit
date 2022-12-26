@@ -37,7 +37,7 @@ impl Client {
         }
     }
 
-    fn tracker_start_request(self: &Self) -> Request {
+    fn tracker_start_request(&self) -> Request {
         Request::new(
             self.torrent.get_tracker_url(),
             self.torrent.info.hash(),
@@ -60,7 +60,7 @@ impl Client {
 
     // todo: implement non compact response format | priority: high
 
-    async fn request_peers(self: &mut Self) -> Result<Vec<[u8; 6]>, Box<dyn Error>> {
+    async fn request_peers(&mut self) -> Result<Vec<[u8; 6]>, Box<dyn Error>> {
         let started_request: Request = self.tracker_start_request();
         let mut iters = 0;
         // todo: move this to config

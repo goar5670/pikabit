@@ -40,7 +40,7 @@ pub struct Info {
 }
 
 impl Info {
-    fn _last_piece_len(self: &Self) -> u32 {
+    fn _last_piece_len(&self) -> u32 {
         let ret = self.length.unwrap() % self.piece_length as u64;
         if ret == 0 {
             return self.piece_length;
@@ -48,36 +48,36 @@ impl Info {
         ret as u32
     }
 
-    pub fn piece_len(self: &Self, piece_index: u32) -> u32 {
+    pub fn piece_len(&self, piece_index: u32) -> u32 {
         if piece_index == self.num_pieces() - 1 {
             return self._last_piece_len();
         }
         self.piece_length
     }
 
-    pub fn len(self: &Self) -> u64 {
+    pub fn len(&self) -> u64 {
         self.length.unwrap()
     }
 
-    pub fn num_pieces(self: &Self) -> u32 {
+    pub fn num_pieces(&self) -> u32 {
         // debug_assert_eq!(self.info.length.unwrap() % self.info.piece_length, 0);
         ((self.length.unwrap() + self.piece_length as u64 - 1) / self.piece_length as u64) as u32
     }
 
-    pub fn num_blocks(self: &Self, piece_index: u32, block_size: u32) -> u32 {
+    pub fn num_blocks(&self, piece_index: u32, block_size: u32) -> u32 {
         ((self.piece_len(piece_index) + block_size - 1) / block_size) as u32
     }
 
-    pub fn piece_hash(self: &Self, piece_index: u32) -> [u8; 20] {
+    pub fn piece_hash(&self, piece_index: u32) -> [u8; 20] {
         let offset = (piece_index * 20) as usize;
         self.pieces[offset..offset + 20].try_into().unwrap()
     }
 
-    pub fn filename(self: &Self) -> &String {
+    pub fn filename(&self) -> &String {
         &self.name
     }
 
-    pub fn hash(self: &Self) -> [u8; 20] {
+    pub fn hash(&self) -> [u8; 20] {
         let bencoded = serde_bencode::to_bytes(&self).unwrap();
         let info_hash = Sha1::digest(&bencoded);
 
@@ -108,11 +108,11 @@ pub struct Metadata {
 }
 
 impl Metadata {
-    pub fn get_tracker_url(self: &Self) -> String {
+    pub fn get_tracker_url(&self) -> String {
         self.announce.clone()
     }
 
-    // pub fn get_piece_length(self: &Self) -> u64 {
+    // pub fn get_piece_length(&self) -> u64 {
     //     self.info.piece_length
     // }
 }
