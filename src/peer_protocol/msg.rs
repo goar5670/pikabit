@@ -59,7 +59,7 @@ impl RecvHandler {
     pub fn new(read_half: tcp::OwnedReadHalf, peer_tx: Sender<Message>) -> JoinHandle<()> {
         let mut handler = Self { read_half };
 
-        let join_handle = tokio::spawn(async move {
+        tokio::spawn(async move {
             loop {
                 let n: u32 = handler._recv_len().await;
                 if n == 0 {
@@ -95,9 +95,7 @@ impl RecvHandler {
                     let _ = peer_tx.send(msg).await;
                 }
             }
-        });
-
-        join_handle
+        })
     }
 
     async fn _recv_len(&mut self) -> u32 {
@@ -118,7 +116,7 @@ impl RecvHandler {
             error!("{:?}", &buf[..20]);
         }
 
-        return n == buf.len();
+        n == buf.len()
     }
 }
 
@@ -158,6 +156,6 @@ impl SendHandler {
             }
         }
 
-        let _ = self.write_half.write(&mut buf).await;
+        let _ = self.write_half.write(&buf).await;
     }
 }

@@ -35,7 +35,7 @@ impl FileHandler {
 
     async fn write_piece(&mut self, offset: u64, piece: &[u8]) {
         self.file.seek(SeekFrom::Start(offset)).await.unwrap();
-        self.file.write(piece).await.unwrap();
+        self.file.write_all(piece).await.unwrap();
     }
 }
 

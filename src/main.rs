@@ -4,9 +4,9 @@ use pikabit::{client::Client, constants};
 async fn main() {
     env_logger::init();
 
-    const TORRENT_FILENAME: &'static str = constants::torrents::FREE_BSD;
+    const TORRENT_FILENAME: &str = constants::torrents::FREE_BSD;
 
     let client = Client::new(TORRENT_FILENAME, None);
 
-    let _ = client.run().await;
+    client.run().await;
 }

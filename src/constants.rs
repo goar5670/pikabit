@@ -1,8 +1,8 @@
 pub mod torrents {
-    pub const UBUNTU22: &'static str = "torrents/ubuntu-22.10-desktop-amd64.iso.torrent";
-    pub const FREE_BSD: &'static str = "torrents/FreeBSD 12.4 RELEASE Sparc64 Disc1 ISO.torrent";
-    pub const UBUNTU22_INFO_HASH: &'static str = "99c82bb73505a3c0b453f9fa0e881d6e5a32a0c1";
-    pub const FREE_BSD_INFO_HASH: &'static str = "f47932ba13094be79904a714a406e7c809636c53";
+    pub const UBUNTU22: &str = "torrents/ubuntu-22.10-desktop-amd64.iso.torrent";
+    pub const FREE_BSD: &str = "torrents/FreeBSD 12.4 RELEASE Sparc64 Disc1 ISO.torrent";
+    pub const UBUNTU22_INFO_HASH: &str = "99c82bb73505a3c0b453f9fa0e881d6e5a32a0c1";
+    pub const FREE_BSD_INFO_HASH: &str = "f47932ba13094be79904a714a406e7c809636c53";
 }
 
 pub mod message_ids {
@@ -23,5 +23,5 @@ pub mod timeouts {
     pub const PEER_CONNECTION: Duration = Duration::from_secs(60);
 }
 
-pub const CLIENT_PREFIX: &'static str = "-pB";
+pub const CLIENT_PREFIX: &str = "-pB";
 pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");

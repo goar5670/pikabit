@@ -49,7 +49,7 @@ impl PeerId {
 impl From<&[u8; 20]> for PeerId {
     fn from(slice: &[u8; 20]) -> Self {
         Self {
-            inner: slice.clone(),
+            inner: *slice,
         }
     }
 }
@@ -77,7 +77,7 @@ pub struct Peer {
 impl Peer {
     pub async fn connect(&self) -> Result<TcpStream, String> {
         match timeout(timeouts::PEER_CONNECTION, TcpStream::connect(&self.address)).await {
-            Ok(r) => r.map_err(|e| format!("{:?}", e)),
+            Ok(r) => r.map_err(|e| format!("{e:?}")),
             Err(_) => Err(format!(
                 "connection timed out, {:?}",
                 timeouts::PEER_CONNECTION
@@ -90,7 +90,7 @@ impl Peer {
     }
 
     pub fn get_id(&self) -> Option<Arc<PeerId>> {
-        self.id.as_ref().map(|id| id.clone())
+        self.id.as_ref().cloned()
     }
 }
 

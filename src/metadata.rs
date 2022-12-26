@@ -65,7 +65,7 @@ impl Info {
     }
 
     pub fn num_blocks(&self, piece_index: u32, block_size: u32) -> u32 {
-        ((self.piece_len(piece_index) + block_size - 1) / block_size) as u32
+        (self.piece_len(piece_index) + block_size - 1) / block_size
     }
 
     pub fn piece_hash(&self, piece_index: u32) -> [u8; 20] {
@@ -79,7 +79,7 @@ impl Info {
 
     pub fn hash(&self) -> [u8; 20] {
         let bencoded = serde_bencode::to_bytes(&self).unwrap();
-        let info_hash = Sha1::digest(&bencoded);
+        let info_hash = Sha1::digest(bencoded);
 
         info_hash.into()
     }
@@ -125,7 +125,7 @@ mod test {
 
     #[test]
     fn info_hash() {
-        const TORRENT_FILENAME: &'static str = constants::torrents::FREE_BSD;
+        const TORRENT_FILENAME: &str = constants::torrents::FREE_BSD;
         let file: Vec<u8> = fs::read(TORRENT_FILENAME).unwrap();
         let torrent: Metadata = serde_bencode::from_bytes(&file).unwrap();
 

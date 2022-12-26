@@ -41,7 +41,7 @@ impl Metadata {
     }
 
     fn num_blocks(&self, piece_index: u32) -> u32 {
-        ((self.piece_len(piece_index) + self.block_size - 1) / self.block_size) as u32
+        (self.piece_len(piece_index) + self.block_size - 1) / self.block_size
     }
 
     fn block_index(&self, block_offset: u32) -> u32 {
@@ -206,7 +206,7 @@ impl RequestsTracker {
     }
 
     pub fn cnt(&self, peer_id: &Arc<PeerId>) -> u32 {
-        self.requested.get(peer_id).map(|c| *c).unwrap_or(0)
+        self.requested.get(peer_id).copied().unwrap_or(0)
     }
 }
 

@@ -73,7 +73,7 @@ impl Client {
                 serde_bencode::from_bytes(&started_request.get().await).unwrap();
             let peers = response.get_peers();
 
-            if peers.len() != 0 {
+            if !peers.is_empty() {
                 return Ok(peers);
             }
             iters += 1;
@@ -192,14 +192,14 @@ impl Client {
                     let mut pr_tracker = lock.get(&peer_id).unwrap().get_mut().await;
                     match msg {
                         Message::Have(piece_index) => {
-                            if pr_tracker.state.am_choked == false && pr_tracker.state.am_interested
+                            if !pr_tracker.state.am_choked && pr_tracker.state.am_interested
                             {
                                 pc_tracker.get_mut().await.update_single(piece_index);
                             }
                             pr_tracker.update_have(piece_index);
                         }
                         Message::Bitfield(buf) => {
-                            if pr_tracker.state.am_choked == false && pr_tracker.state.am_interested
+                            if !pr_tracker.state.am_choked && pr_tracker.state.am_interested
                             {
                                 pc_tracker.get_mut().await.update_multiple(&buf);
                             }
@@ -209,7 +209,7 @@ impl Client {
                             );
 
                             for i in 0..pc_tracker.get().await.metadata.num_pieces() {
-                                if bitfield.get(i).unwrap() == true {
+                                if bitfield.get(i).unwrap() {
                                     pr_tracker.update_have(i);
                                 }
                             }
@@ -267,7 +267,7 @@ impl Client {
                                     "peer_id: {:?}, requested piece {}, reqt_len: {}",
                                     peer_id,
                                     piece_index,
-                                    reqt_clone.get().await.cnt(&peer_id)
+                                    reqt_clone.get().await.cnt(peer_id)
                                 );
                                 break 'outer;
                             }

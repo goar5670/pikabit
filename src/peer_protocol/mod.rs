@@ -44,8 +44,6 @@ impl PeerConnectionHandler {
 
         let (msg_tx, sh_handle) = SendHandler::new(write_half);
 
-        let msg_tx_clone = msg_tx.clone();
-
         let rh_handle = RecvHandler::new(read_half, tx);
 
         let join_handle = tokio::spawn(async move {
@@ -56,7 +54,7 @@ impl PeerConnectionHandler {
             join_all(vec![sh_handle, rh_handle]).await;
         });
 
-        Ok((peer_id, msg_tx_clone, join_handle))
+        Ok((peer_id, msg_tx, join_handle))
     }
 
     fn verify_handshake(received: &[u8], sent: &[u8]) -> Result<[u8; 20], &'static str> {
