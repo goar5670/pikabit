@@ -5,7 +5,7 @@ pub mod torrents {
     pub const FREE_BSD_INFO_HASH: &str = "f47932ba13094be79904a714a406e7c809636c53";
 }
 
-pub mod message_ids {
+pub mod msg_ids {
     pub const CHOKE: u8 = 0;
     pub const UNCHOKE: u8 = 1;
     pub const INTERESTED: u8 = 2;

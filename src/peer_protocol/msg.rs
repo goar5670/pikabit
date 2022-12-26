@@ -11,9 +11,7 @@ use tokio::{
 use byteorder::{BigEndian, ByteOrder};
 use log::{debug, error};
 
-use crate::constants::message_ids::*;
-
-use crate::constants::message_ids;
+use crate::constants::msg_ids;
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum Message {
@@ -38,12 +36,12 @@ impl Message {
                 buf.write_u32(length).await.unwrap();
 
                 send_handler
-                    .send(13, Some(message_ids::REQUEST), Some(&mut buf))
+                    .send(13, Some(msg_ids::REQUEST), Some(&mut buf))
                     .await;
             }
             Message::Interested => {
                 send_handler
-                    .send(1, Some(message_ids::INTERESTED), None)
+                    .send(1, Some(msg_ids::INTERESTED), None)
                     .await
             }
             _ => {}
@@ -79,11 +77,11 @@ impl RecvHandler {
                 );
 
                 let msg = match msg_id {
-                    CHOKE => Message::Choke,
-                    UNCHOKE => Message::Unchoke,
-                    HAVE => Message::Have(BigEndian::read_u32(&buf[1..])),
-                    BITFIELD => Message::Bitfield(buf[1..].to_vec()),
-                    PIECE => Message::Piece(
+                    msg_ids::CHOKE => Message::Choke,
+                    msg_ids::UNCHOKE => Message::Unchoke,
+                    msg_ids::HAVE => Message::Have(BigEndian::read_u32(&buf[1..])),
+                    msg_ids::BITFIELD => Message::Bitfield(buf[1..].to_vec()),
+                    msg_ids::PIECE => Message::Piece(
                         BigEndian::read_u32(&buf[1..5]),
                         BigEndian::read_u32(&buf[5..9]),
                         buf[9..].to_vec(),

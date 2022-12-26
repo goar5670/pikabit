@@ -12,13 +12,15 @@ use tokio::{
 };
 
 use crate::bitfield::*;
+use peer::{Peer, PeerId};
 
-use crate::peer::{self, *};
-pub use msg::Message;
+use msg::Message;
 use msg::{RecvHandler, SendHandler};
 
-// mod bitfield;
-mod msg;
+pub mod msg;
+pub mod peer;
+pub mod piece;
+pub mod file;
 
 pub struct PeerConnectionHandler {
     peer: Peer,
@@ -35,7 +37,6 @@ impl PeerConnectionHandler {
         let mut stream = handler.peer.connect().await?;
 
         let peer_id = Arc::new(Self::handshake(&handshake_payload, &mut stream).await);
-
         handler.peer.set_id(peer_id.clone());
 
         let (read_half, write_half) = stream.into_split();
@@ -43,7 +44,6 @@ impl PeerConnectionHandler {
         let (tx, mut rx) = mpsc::channel(40);
 
         let (msg_tx, sh_handle) = SendHandler::new(write_half);
-
         let rh_handle = RecvHandler::new(read_half, tx);
 
         let join_handle = tokio::spawn(async move {
@@ -94,7 +94,7 @@ impl PeerConnectionHandler {
 pub type RelayedMessage = (Arc<PeerId>, Message);
 
 pub struct PeerTracker {
-    pub state: State,
+    pub state: peer::State,
     pub msg_tx: Sender<Message>,
     pub have: BitfieldOwned,
 }

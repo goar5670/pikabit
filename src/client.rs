@@ -9,9 +9,12 @@ use crate::bitfield::*;
 use crate::conc::{SharedMut, SharedRw};
 
 use crate::metadata::Metadata;
-use crate::peer::*;
-use crate::peer_protocol::{Message, PeerConnectionHandler, PeerTracker};
-use crate::piece::{PieceBuffer, PieceTracker, RequestsTracker};
+use crate::peer_protocol::{
+    PeerConnectionHandler, PeerTracker,
+    msg::Message,
+    peer::{Peer, PeerId},
+    piece::{PieceBuffer, PieceTracker, RequestsTracker},
+};
 use crate::tracker_protocol::http::{Event, Request, Response};
 
 pub struct Client {
@@ -192,15 +195,13 @@ impl Client {
                     let mut pr_tracker = lock.get(&peer_id).unwrap().get_mut().await;
                     match msg {
                         Message::Have(piece_index) => {
-                            if !pr_tracker.state.am_choked && pr_tracker.state.am_interested
-                            {
+                            if !pr_tracker.state.am_choked && pr_tracker.state.am_interested {
                                 pc_tracker.get_mut().await.update_single(piece_index);
                             }
                             pr_tracker.update_have(piece_index);
                         }
                         Message::Bitfield(buf) => {
-                            if !pr_tracker.state.am_choked && pr_tracker.state.am_interested
-                            {
+                            if !pr_tracker.state.am_choked && pr_tracker.state.am_interested {
                                 pc_tracker.get_mut().await.update_multiple(&buf);
                             }
                             let bitfield = BitfieldRef::new(
