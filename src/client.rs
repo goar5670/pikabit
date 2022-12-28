@@ -2,8 +2,8 @@ use futures::future::join_all;
 use log::{info, warn};
 use serde_bencode;
 use sha1::{Digest, Sha1};
-use std::{collections::HashMap, error::Error, fs, mem};
-use tokio::sync::mpsc;
+use std::{collections::HashMap, error::Error, fs, mem, sync::Arc};
+use tokio::{fs::File, sync::mpsc};
 
 use crate::bitfield::*;
 use crate::conc::{SharedMut, SharedRw};
@@ -98,6 +98,33 @@ impl Client {
         payload
     }
 
+    async fn on_piece_completed(
+        pc_tracker: &SharedRw<PieceTracker>,
+        pbuf: &PieceBuffer,
+        req_tracker: &SharedRw<RequestsTracker>,
+        file: &mut File,
+        piece_index: u32,
+        peer_id: &Arc<PeerId>,
+    ) {
+        let mut lock = pc_tracker.get_mut().await;
+        let piece = lock.ordered_piece(piece_index, pbuf);
+        let piece_hash: [u8; 20] = Sha1::digest(&piece).try_into().unwrap();
+        if !lock.verify_piece_hash(piece_index, &piece_hash) {
+            warn!("hash verification failed for piece {piece_index}");
+            lock.update_single(piece_index);
+        } else {
+            fops::write_piece(file, lock.metadata.piece_offset(piece_index), &piece).await;
+            lock.on_piece_saved(piece_index);
+            let rem = lock.rem();
+            mem::drop(lock);
+            req_tracker.get_mut().await.decrease(&peer_id);
+            info!(
+                "peer_id: {:?}, piece {} saved, rem {}",
+                peer_id, piece_index, rem,
+            );
+        }
+    }
+
     pub async fn run(mut self) {
         let peer_list = self.request_peers().await.unwrap();
         info!("number of peers {}", peer_list.len());
@@ -166,28 +193,15 @@ impl Client {
                     );
 
                     if rem == 0 {
-                        let mut lock = pc_tracker.get_mut().await;
-                        let piece = lock.ordered_piece(piece_index, &pbuf);
-                        let piece_hash: [u8; 20] = Sha1::digest(&piece).try_into().unwrap();
-                        if !lock.verify_piece_hash(piece_index, &piece_hash) {
-                            warn!("hash verification failed for piece {piece_index}");
-                            lock.update_single(piece_index);
-                        } else {
-                            fops::write_piece(
-                                &mut file,
-                                lock.metadata.piece_offset(piece_index),
-                                &piece,
-                            )
-                            .await;
-                            lock.on_piece_saved(piece_index);
-                            let rem = lock.rem();
-                            mem::drop(lock);
-                            req_tracker.get_mut().await.decrease(&peer_id);
-                            info!(
-                                "peer_id: {:?}, piece {} saved, rem {}",
-                                peer_id, piece_index, rem,
-                            );
-                        }
+                        Self::on_piece_completed(
+                            &pc_tracker,
+                            &pbuf,
+                            &req_tracker,
+                            &mut file,
+                            piece_index,
+                            &peer_id,
+                        )
+                        .await;
                     }
                 } else {
                     let mut lock = pr_map.lock().await;
