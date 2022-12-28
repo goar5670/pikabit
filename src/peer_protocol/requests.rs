@@ -34,9 +34,9 @@ impl RequestsTracker {
         }
     }
 
-    pub fn decrease(&mut self, peer_id: Arc<PeerId>) {
-        if self.requested.contains_key(&peer_id) {
-            let cnt = self.requested.get_mut(&peer_id).unwrap();
+    pub fn decrease(&mut self, peer_id: &Arc<PeerId>) {
+        if self.requested.contains_key(peer_id) {
+            let cnt = self.requested.get_mut(peer_id).unwrap();
             if *cnt > 0 {
                 *cnt -= 1;
             } else {
@@ -87,11 +87,13 @@ pub fn spawn_reqh(
                                 &pr_tracker.get().await.msg_tx,
                             )
                             .await;
+                            pc_tracker.get_mut().await.on_piece_requested(piece_index);
                             info!(
-                                "peer_id: {:?}, requested piece {}, reqt_len: {}",
+                                "peer_id: {:?}, requested piece {}, reqt_len: {}, rem: {}",
                                 peer_id,
                                 piece_index,
-                                req_tracker.get().await.cnt(peer_id)
+                                req_tracker.get().await.cnt(peer_id),
+                                pc_tracker.get().await.pieces_pq.len()
                             );
                             break 'outer;
                         }

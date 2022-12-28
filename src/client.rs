@@ -1,15 +1,15 @@
 use futures::future::join_all;
 use log::{info, warn};
 use serde_bencode;
-use std::{collections::HashMap, error::Error, fs};
+use sha1::{Digest, Sha1};
+use std::{collections::HashMap, error::Error, fs, mem};
 use tokio::sync::mpsc;
 
 use crate::bitfield::*;
 use crate::conc::{SharedMut, SharedRw};
-
 use crate::metadata::Metadata;
 use crate::peer_protocol::{
-    self,
+    self, fops,
     msg::Message,
     peer::{Peer, PeerId},
     piece::{PieceBuffer, PieceTracker},
@@ -105,16 +105,17 @@ impl Client {
         let pc_tracker = SharedRw::new(PieceTracker::new(
             self.torrent.info.len(),
             self.torrent.info.piece_len(0),
+            self.torrent.info.piece_hashes(),
         ));
         let pct_clone = pc_tracker.clone();
 
-        // let (fh_tx, fh_handle) = FileHandler::new(&self.torrent.info.filename()).await;
+        let mut file = fops::new_file(&self.torrent.info.filename()).await;
         let (tx, mut rx) = mpsc::channel(40);
 
         let pr_map = SharedMut::new(HashMap::new());
 
         let mut pch_handles = vec![];
-        let num_pieces = self.torrent.info.num_pieces();
+        let num_pieces = pc_tracker.get().await.metadata.num_pieces();
         let hs_payload = self.hs_payload();
 
         for peer in peer_list {
@@ -161,43 +162,52 @@ impl Client {
                         piece_index,
                         offset_in_buffer,
                         offset_in_piece,
+                        buf.len(),
                     );
 
                     if rem == 0 {
-                        info!(
-                            "peer_id: {:?}, piece {} saved, rem {}",
-                            peer_id,
-                            piece_index,
-                            pc_tracker.get().await.rem()
-                        );
-                        req_tracker.get_mut().await.decrease(peer_id);
-                        pc_tracker.get_mut().await.on_piece_completed(piece_index);
-                        // get piece from buf and save it
+                        let mut lock = pc_tracker.get_mut().await;
+                        let piece = lock.ordered_piece(piece_index, &pbuf);
+                        let piece_hash: [u8; 20] = Sha1::digest(&piece).try_into().unwrap();
+                        if !lock.verify_piece_hash(piece_index, &piece_hash) {
+                            warn!("hash verification failed for piece {piece_index}");
+                            lock.update_single(piece_index);
+                        } else {
+                            fops::write_piece(
+                                &mut file,
+                                lock.metadata.piece_offset(piece_index),
+                                &piece,
+                            )
+                            .await;
+                            lock.on_piece_saved(piece_index);
+                            let rem = lock.rem();
+                            mem::drop(lock);
+                            req_tracker.get_mut().await.decrease(&peer_id);
+                            info!(
+                                "peer_id: {:?}, piece {} saved, rem {}",
+                                peer_id, piece_index, rem,
+                            );
+                        }
                     }
                 } else {
-                    let lock = pr_map.lock().await;
-                    let mut pr_tracker = lock.get(&peer_id).unwrap().get_mut().await;
+                    let mut lock = pr_map.lock().await;
+                    let mut pr_tracker = lock.get_mut(&peer_id).unwrap().get_mut().await;
                     match msg {
                         Message::Have(piece_index) => {
                             if !pr_tracker.state.am_choked && pr_tracker.state.am_interested {
                                 pc_tracker.get_mut().await.update_single(piece_index);
                             }
-                            pr_tracker.update_have(piece_index);
+                            pr_tracker.have.set(piece_index);
                         }
                         Message::Bitfield(buf) => {
                             if !pr_tracker.state.am_choked && pr_tracker.state.am_interested {
                                 pc_tracker.get_mut().await.update_multiple(&buf);
                             }
-                            let bitfield = BitfieldRef::new(
+                            pr_tracker.have = BitfieldRef::new(
                                 &buf,
                                 pc_tracker.get().await.metadata.num_pieces(),
-                            );
-
-                            for i in 0..pc_tracker.get().await.metadata.num_pieces() {
-                                if bitfield.get(i).unwrap() {
-                                    pr_tracker.update_have(i);
-                                }
-                            }
+                            )
+                            .into();
                         }
                         Message::Choke => pr_tracker.state.am_choked = true,
                         Message::Unchoke => {

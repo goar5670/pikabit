@@ -17,6 +17,7 @@ pub trait Bitfield {
     }
 }
 
+#[derive(Debug)]
 pub struct BitfieldRef<'a> {
     bytes: &'a [u8],
     cnt_marked: u32,
@@ -25,11 +26,19 @@ pub struct BitfieldRef<'a> {
 
 impl<'a> BitfieldRef<'a> {
     pub fn new(buf: &'a [u8], length: u32) -> Self {
-        Self {
+        let mut bf = Self {
             bytes: buf,
             cnt_marked: 0,
             length,
+        };
+
+        for i in 0..length {
+            if bf.get(i).unwrap() {
+                bf.cnt_marked += 1;
+            }
         }
+
+        bf
     }
 }
 
@@ -59,6 +68,7 @@ impl Bitfield for BitfieldRef<'_> {
     }
 }
 
+#[derive(Debug)]
 pub struct BitfieldOwned {
     bytes: Vec<u8>,
     cnt_marked: u32,
@@ -111,9 +121,19 @@ impl BitfieldOwned {
             return self.rem();
         }
 
-        *byte &= 1 << offset;
+        *byte |= 1 << offset;
         self.cnt_marked += 1;
 
         self.rem()
+    }
+}
+
+impl From<BitfieldRef<'_>> for BitfieldOwned {
+    fn from(value: BitfieldRef) -> Self {
+        Self {
+            bytes: value.bytes().to_vec(),
+            cnt_marked: value.cnt_marked,
+            length: value.length,
+        }
     }
 }

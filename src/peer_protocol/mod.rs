@@ -16,7 +16,7 @@ use peer::{Peer, PeerId};
 
 use msg::Message;
 
-pub mod file;
+pub mod fops;
 pub mod msg;
 pub mod peer;
 pub mod piece;
@@ -98,9 +98,5 @@ impl PeerTracker {
             have,
             msg_tx,
         }
-    }
-
-    pub fn update_have(&mut self, piece_index: u32) -> u32 {
-        self.have.set(piece_index)
     }
 }

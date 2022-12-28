@@ -68,11 +68,6 @@ impl Info {
         (self.piece_len(piece_index) + block_size - 1) / block_size
     }
 
-    pub fn piece_hash(&self, piece_index: u32) -> [u8; 20] {
-        let offset = (piece_index * 20) as usize;
-        self.pieces[offset..offset + 20].try_into().unwrap()
-    }
-
     pub fn filename(&self) -> &String {
         &self.name
     }
@@ -82,6 +77,10 @@ impl Info {
         let info_hash = Sha1::digest(bencoded);
 
         info_hash.into()
+    }
+
+    pub fn piece_hashes(&self) -> Vec<u8> {
+        self.pieces.clone().into_vec()
     }
 }
 

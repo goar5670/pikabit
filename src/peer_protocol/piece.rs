@@ -7,15 +7,16 @@ pub struct Metadata {
     total_len: u64,
     piece_len: u32,
     block_size: u32,
-    // hashes: Vec<u8>,
+    hashes: Vec<u8>,
 }
 
 impl Metadata {
-    fn new(total_len: u64, piece_len: u32, block_size: Option<u32>) -> Self {
+    fn new(total_len: u64, piece_len: u32, block_size: Option<u32>, hashes: Vec<u8>) -> Self {
         Self {
             total_len,
             piece_len,
             block_size: block_size.unwrap_or(1024 * 16),
+            hashes,
         }
     }
 
@@ -56,24 +57,68 @@ impl Metadata {
     pub fn block_size(&self) -> u32 {
         self.block_size
     }
+
+    pub fn piece_offset(&self, piece_index: u32) -> u64 {
+        self.piece_len as u64 * piece_index as u64
+    }
+
+    pub fn piece_hash(&self, piece_index: u32) -> &[u8] {
+        let offset = (piece_index * 20) as usize;
+        &self.hashes[offset..offset + 20]
+    }
 }
 
-struct PieceInfo {
-    have: BitfieldOwned,
-    // offset_in_buffer, offset_in_piece
-    offsets: Vec<(u32, u32)>,
+#[derive(Debug)]
+pub struct BlockInfo {
+    offset_in_buffer: u32,
+    pub offset_in_piece: u32,
+    size: usize,
 }
 
-impl PieceInfo {
-    fn new(piece_len: u32) -> Self {
+impl BlockInfo {
+    fn new(offset_in_buffer: u32, offset_in_piece: u32, block_size: usize) -> Self {
         Self {
-            have: BitfieldOwned::new(piece_len),
-            offsets: vec![(0, 0); piece_len as usize],
+            offset_in_buffer,
+            offset_in_piece,
+            size: block_size,
         }
     }
 
-    fn add_block(&mut self, block_index: u32, offset_in_buffer: u32, offset_in_piece: u32) -> u32 {
-        *self.offsets.get_mut(block_index as usize).unwrap() = (offset_in_buffer, offset_in_piece);
+    pub fn get_range(&self) -> (usize, usize) {
+        (
+            self.offset_in_buffer as usize,
+            self.offset_in_buffer as usize + self.size,
+        )
+    }
+}
+
+pub struct PieceInfo {
+    have: BitfieldOwned,
+    // offset_in_buffer, offset_in_piece
+    blocks: Vec<Option<BlockInfo>>,
+}
+
+impl PieceInfo {
+    fn new(num_blocks: u32) -> Self {
+        Self {
+            have: BitfieldOwned::new(num_blocks),
+            blocks: (0..num_blocks).map(|_| None).collect(),
+        }
+    }
+
+    fn add_block(
+        &mut self,
+        block_index: u32,
+        offset_in_buffer: u32,
+        offset_in_piece: u32,
+        block_size: usize,
+    ) -> u32 {
+        let block = self.blocks.get_mut(block_index as usize).unwrap();
+        *block = Some(BlockInfo::new(
+            offset_in_buffer,
+            offset_in_piece,
+            block_size,
+        ));
         self.have.set(block_index)
     }
 }
@@ -82,14 +127,16 @@ pub struct PieceTracker {
     pub metadata: Metadata,
     pub pieces_pq: PriorityQueue<u32, Reverse<u32>>,
     have: BitfieldOwned,
+    requested: BitfieldOwned,
     buffered: HashMap<u32, PieceInfo>,
 }
 
 impl PieceTracker {
-    pub fn new(total_len: u64, piece_len: u32) -> Self {
-        let metadata = Metadata::new(total_len, piece_len, None);
+    pub fn new(total_len: u64, piece_len: u32, hashes: Vec<u8>) -> Self {
+        let metadata = Metadata::new(total_len, piece_len, None, hashes);
         Self {
             have: BitfieldOwned::new(metadata.num_pieces()),
+            requested: BitfieldOwned::new(metadata.num_pieces()),
             metadata,
             pieces_pq: PriorityQueue::new(),
             buffered: HashMap::new(),
@@ -97,7 +144,7 @@ impl PieceTracker {
     }
 
     pub fn update_single(&mut self, piece_index: u32) {
-        if self.have.get(piece_index).unwrap() {
+        if self.have.get(piece_index).unwrap() || self.requested.get(piece_index).unwrap() {
             return;
         }
 
@@ -110,10 +157,10 @@ impl PieceTracker {
     }
 
     pub fn update_multiple(&mut self, buf: &[u8]) {
-        let bytebuf = BitfieldRef::new(buf, self.metadata.num_pieces());
+        let bitfield = BitfieldRef::new(buf, self.metadata.num_pieces());
 
-        for i in 0..self.metadata.num_pieces() {
-            if !bytebuf.get(i).unwrap() {
+        for i in 0..bitfield.len() {
+            if bitfield.get(i).unwrap() {
                 self.update_single(i);
             }
         }
@@ -128,6 +175,7 @@ impl PieceTracker {
         piece_index: u32,
         offset_in_buffer: u32,
         offset_in_piece: u32,
+        block_size: usize,
     ) -> u32 {
         match self.buffered.get_mut(&piece_index) {
             None => {
@@ -136,6 +184,7 @@ impl PieceTracker {
                     self.metadata.block_index(offset_in_piece),
                     offset_in_buffer,
                     offset_in_piece,
+                    block_size,
                 );
                 self.buffered.insert(piece_index, piece_info);
                 rem
@@ -144,13 +193,53 @@ impl PieceTracker {
                 self.metadata.block_index(offset_in_piece),
                 offset_in_buffer,
                 offset_in_piece,
+                block_size,
             ),
         }
     }
 
-    pub fn on_piece_completed(&mut self, piece_index: u32) {
+    pub fn on_piece_requested(&mut self, piece_index: u32) {
+        self.requested.set(piece_index);
+    }
+
+    pub fn ordered_piece(&self, piece_index: u32, pbuf: &PieceBuffer) -> Vec<u8> {
+        let piece = pbuf.get(piece_index);
+        let mut ordered: Vec<u8> = vec![];
+
+        for (i, binfo) in self.piece_ordering(piece_index).iter().enumerate() {
+            assert!(
+                !binfo.is_none(),
+                "binfo is none, piece_index {}, block_index {}",
+                piece_index,
+                i
+            );
+            let binfo = binfo.as_ref().unwrap();
+            let (s, e) = binfo.get_range();
+            let offset_in_piece = binfo.offset_in_piece;
+            assert_eq!(
+                offset_in_piece,
+                ordered.len() as u32,
+                "Error while reordering piece, offset: {}, current piece length: {}",
+                offset_in_piece,
+                ordered.len()
+            );
+            ordered.extend_from_slice(&piece[s..e]);
+        }
+
+        ordered
+    }
+
+    pub fn verify_piece_hash(&self, piece_index: u32, hash: &[u8; 20]) -> bool {
+        self.metadata.piece_hash(piece_index) == hash
+    }
+
+    pub fn on_piece_saved(&mut self, piece_index: u32) {
         self.have.set(piece_index);
         self.buffered.remove(&piece_index);
+    }
+
+    pub fn piece_ordering(&self, piece_index: u32) -> &Vec<Option<BlockInfo>> {
+        &self.buffered.get(&piece_index).unwrap().blocks
     }
 
     pub fn next_piece(&mut self) -> Option<u32> {
@@ -188,5 +277,9 @@ impl PieceBuffer {
         };
 
         offset as u32
+    }
+
+    pub fn get(&self, piece_index: u32) -> &Vec<u8> {
+        self.inner.get(&piece_index).unwrap()
     }
 }
