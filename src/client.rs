@@ -131,7 +131,7 @@ impl Client {
 
         let pc_tracker = SharedRw::new(PieceTracker::new(
             self.torrent.info.len(),
-            self.torrent.info.piece_len(0),
+            self.torrent.info.piece_len(),
             self.torrent.info.piece_hashes(),
         ));
         let pct_clone = pc_tracker.clone();

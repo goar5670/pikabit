@@ -4,7 +4,6 @@ use serde_bencode;
 use serde_bytes::ByteBuf;
 use serde_derive::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
-use std::sync::Arc;
 
 // #[derive(Debug, Deserialize)]
 // struct Node(String, i64);
@@ -40,32 +39,12 @@ pub struct Info {
 }
 
 impl Info {
-    fn _last_piece_len(&self) -> u32 {
-        let ret = self.length.unwrap() % self.piece_length as u64;
-        if ret == 0 {
-            return self.piece_length;
-        }
-        ret as u32
-    }
-
-    pub fn piece_len(&self, piece_index: u32) -> u32 {
-        if piece_index == self.num_pieces() - 1 {
-            return self._last_piece_len();
-        }
+    pub fn piece_len(&self) -> u32 {
         self.piece_length
     }
 
     pub fn len(&self) -> u64 {
         self.length.unwrap()
-    }
-
-    pub fn num_pieces(&self) -> u32 {
-        // debug_assert_eq!(self.info.length.unwrap() % self.info.piece_length, 0);
-        ((self.length.unwrap() + self.piece_length as u64 - 1) / self.piece_length as u64) as u32
-    }
-
-    pub fn num_blocks(&self, piece_index: u32, block_size: u32) -> u32 {
-        (self.piece_len(piece_index) + block_size - 1) / block_size
     }
 
     pub fn filename(&self) -> &String {
@@ -86,7 +65,7 @@ impl Info {
 
 #[derive(Debug, Deserialize)]
 pub struct Metadata {
-    pub info: Arc<Info>,
+    pub info: Info,
     announce: String,
     // #[serde(default)]
     // nodes: Option<Vec<Node>>,
