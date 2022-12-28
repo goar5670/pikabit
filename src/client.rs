@@ -16,6 +16,7 @@ use crate::peer_protocol::{
     requests::{self, RequestsTracker},
     PeerTracker,
 };
+use crate::stats::StatsTracker;
 use crate::tracker_protocol::http::{Event, Request, Response};
 
 pub struct Client {
@@ -102,6 +103,7 @@ impl Client {
         pc_tracker: &SharedRw<PieceTracker>,
         pbuf: &PieceBuffer,
         req_tracker: &SharedRw<RequestsTracker>,
+        stats_tracker: &SharedMut<StatsTracker>,
         file: &mut File,
         piece_index: u32,
         peer_id: &Arc<PeerId>,
@@ -122,6 +124,10 @@ impl Client {
                 "peer_id: {:?}, piece {} saved, rem {}",
                 peer_id, piece_index, rem,
             );
+            stats_tracker
+                .lock()
+                .await
+                .update(pc_tracker.get().await.metadata.piece_len(piece_index));
         }
     }
 
@@ -181,6 +187,16 @@ impl Client {
 
         let mut pbuf = PieceBuffer::new();
 
+        let stats_tracker = SharedMut::new(StatsTracker::new(None, self.torrent.info.len()));
+        let stt_clone = stats_tracker.clone();
+
+        let stats_handle = tokio::spawn(async move {
+            loop {
+                stats_tracker.lock().await.print();
+                tokio::time::sleep(tokio::time::Duration::from_millis(1234)).await;
+            }
+        });
+
         let recv_handle = tokio::spawn(async move {
             while let Some((peer_id, msg)) = rx.recv().await {
                 if let Message::Piece(piece_index, offset_in_piece, buf) = msg {
@@ -197,6 +213,7 @@ impl Client {
                             &pc_tracker,
                             &pbuf,
                             &req_tracker,
+                            &stt_clone,
                             &mut file,
                             piece_index,
                             &peer_id,
@@ -248,6 +265,6 @@ impl Client {
         let rqh_handle = requests::spawn_reqh(pct_clone, pr_map_clone, reqt_clone);
 
         join_all(pch_handles).await;
-        join_all(vec![rqh_handle, recv_handle]).await;
+        join_all(vec![rqh_handle, recv_handle, stats_handle]).await;
     }
 }
