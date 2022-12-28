@@ -97,20 +97,20 @@ impl Metadata {
 
 #[cfg(test)]
 mod test {
-    use super::super::constants;
     use super::Metadata;
     use std::fs;
 
     #[test]
     fn info_hash() {
-        const TORRENT_FILENAME: &str = constants::torrents::FREE_BSD;
+        const TORRENT_FILENAME: &str = "torrents/test_info_hash";
+        const INFO_HASH: &str = "f47932ba13094be79904a714a406e7c809636c53";
         let file: Vec<u8> = fs::read(TORRENT_FILENAME).unwrap();
         let torrent: Metadata = serde_bencode::from_bytes(&file).unwrap();
 
         let info_hash = torrent.info.hash();
         debug_assert_eq!(
             hex::encode(info_hash),
-            constants::torrents::FREE_BSD_INFO_HASH
+            INFO_HASH,
         );
         debug_assert_eq!(info_hash.len(), 20);
     }
