@@ -2,7 +2,7 @@ use pikabit::{client::Client, constants};
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    log4rs::init_file("log_config.yml", Default::default()).unwrap();
 
     const TORRENT_FILENAME: &str = constants::torrents::FREE_BSD;
 
