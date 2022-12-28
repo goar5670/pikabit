@@ -7,7 +7,6 @@ use tokio::{fs::File, sync::mpsc};
 
 use crate::bitfield::*;
 use crate::conc::{SharedMut, SharedRw};
-use crate::metadata::Metadata;
 use crate::peer_protocol::{
     self, fops,
     msg::Message,
@@ -17,7 +16,10 @@ use crate::peer_protocol::{
     PeerTracker,
 };
 use crate::stats::StatsTracker;
-use crate::tracker_protocol::http::{Event, Request, Response};
+use crate::tracker_protocol::{
+    metadata::Metadata,
+    http::{Event, Request, Response},
+};
 
 pub struct Client {
     peer_id: PeerId,

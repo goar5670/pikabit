@@ -66,7 +66,11 @@ impl Info {
 #[derive(Debug, Deserialize)]
 pub struct Metadata {
     pub info: Info,
-    announce: String,
+    #[serde(default)]
+    pub announce: Option<String>,
+    #[serde(rename = "announce-list")]
+    pub announce_list: Option<Vec<Vec<String>>>,
+
     // #[serde(default)]
     // nodes: Option<Vec<Node>>,
     // #[serde(default)]
@@ -74,8 +78,6 @@ pub struct Metadata {
     // #[serde(default)]
     // httpseeds: Option<Vec<String>>,
     // #[serde(default)]
-    // #[serde(rename = "announce-list")]
-    // announce_list: Option<Vec<Vec<String>>>,
     // #[serde(default)]
     // #[serde(rename = "creation date")]
     // creation_date: Option<i64>,
@@ -87,12 +89,8 @@ pub struct Metadata {
 
 impl Metadata {
     pub fn get_tracker_url(&self) -> String {
-        self.announce.clone()
+        self.announce.as_ref().unwrap().clone()
     }
-
-    // pub fn get_piece_length(&self) -> u64 {
-    //     self.info.piece_length
-    // }
 }
 
 #[cfg(test)]
