@@ -1,4 +1,7 @@
-use std::time::SystemTime;
+use std::{
+    time::SystemTime,
+    io::{stdout, Write},
+};
 
 enum SpeedUnit {
     Bytes,
@@ -33,7 +36,7 @@ impl Speed {
     }
 
     fn format(&self) -> String {
-        format!("{:.2} {}", self.value, self.unit.format())
+        format!("{:.2} {}   ", self.value, self.unit.format())
     }
 }
 
@@ -79,6 +82,7 @@ impl StatsTracker {
     }
 
     pub fn print(&mut self) {
+        let mut stdout = stdout();
         let speed =
             Speed::new((self.latent as f64) / (self.last_printed.elapsed().unwrap().as_secs_f64()));
 
@@ -94,6 +98,7 @@ impl StatsTracker {
         );
         let progress = ((self.downloaded as f64 / self.total as f64) * 100.0).round() as u8;
 
-        println!("{} {}", Self::format_progress(progress), speed.format());
+        print!("\r{} {}", Self::format_progress(progress), speed.format());
+        stdout.flush().unwrap();
     }
 }
