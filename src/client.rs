@@ -2,11 +2,16 @@ use futures::future::join_all;
 use log::{info, warn};
 use serde_bencode;
 use sha1::{Digest, Sha1};
-use std::{collections::HashMap, error::Error, fs, mem, sync::Arc};
-use tokio::{fs::File, sync::mpsc};
+use std::{collections::HashMap, fs, mem, sync::Arc};
+use tokio::{
+    fs::File,
+    sync::mpsc::{self, Sender},
+    task::JoinHandle,
+};
 
 use crate::bitfield::*;
 use crate::conc::{SharedMut, SharedRw};
+use crate::peer_protocol::RelayedMessage;
 use crate::peer_protocol::{
     self, fops,
     msg::Message,
@@ -16,10 +21,8 @@ use crate::peer_protocol::{
     PeerTracker,
 };
 use crate::stats::StatsTracker;
-use crate::tracker_protocol::{
-    metadata::Metadata,
-    http::{Event, Request, Response},
-};
+use crate::tracker_protocol::spawn_tch;
+use crate::tracker_protocol::metadata::Metadata;
 
 pub struct Client {
     peer_id: PeerId,
@@ -44,50 +47,9 @@ impl Client {
         }
     }
 
-    fn tracker_start_request(&self) -> Request {
-        Request::new(
-            self.torrent.get_tracker_url(),
-            self.torrent.info.hash(),
-            self.peer_id.to_string(),
-            self.port,
-            0,
-            0,
-            self.torrent.info.len(),
-            1,
-            0,
-            Some(Event::Started),
-            None,
-            Some(50),
-            None,
-            None,
-        )
-    }
-
     // todo: implement stop, resume functionality | priority: high
 
     // todo: implement non compact response format | priority: high
-
-    async fn request_peers(&mut self) -> Result<Vec<[u8; 6]>, Box<dyn Error>> {
-        let started_request: Request = self.tracker_start_request();
-        let mut iters = 0;
-        // todo: move this to config
-        let max_iters = 100;
-
-        info!("Fetching peers from tracker...");
-
-        while iters < max_iters {
-            let response: Response =
-                serde_bencode::from_bytes(&started_request.get().await).unwrap();
-            let peers = response.get_peers();
-
-            if !peers.is_empty() {
-                return Ok(peers);
-            }
-            iters += 1;
-        }
-
-        panic!("Couldn't get peers from the tracker");
-    }
 
     fn hs_payload(&self) -> [u8; 68] {
         let info_hash = self.torrent.info.hash();
@@ -133,59 +95,78 @@ impl Client {
         }
     }
 
-    pub async fn run(mut self) {
-        let peer_list = self.request_peers().await.unwrap();
-        info!("number of peers {}", peer_list.len());
+    async fn handle_new_peers(
+        &self,
+        pr_map: SharedMut<HashMap<Arc<PeerId>, SharedRw<PeerTracker>>>,
+        num_pieces: u32,
+        peer_tx: Sender<RelayedMessage>,
+    ) -> JoinHandle<()> {
+        let (tracker_tx, mut tracker_rx) = mpsc::channel(40);
+        spawn_tch(
+            &self.torrent,
+            Arc::new(*self.peer_id.as_bytes()),
+            self.port,
+            tracker_tx.clone(),
+        )
+        .await;
 
+        let hs_payload = self.hs_payload();
+
+        tokio::spawn(async move {
+            let mut pch_handles = vec![];
+            while let Some(addr) = tracker_rx.recv().await {
+                let pr_map_clone = pr_map.clone();
+                let tx_clone = peer_tx.clone();
+
+                let handle = tokio::spawn(async move {
+                    match peer_protocol::spawn_prch(Peer::from(addr), tx_clone, hs_payload).await {
+                        Ok((peer_id, msg_tx, pch_handle)) => {
+                            let _ = msg_tx.send(Message::Interested).await;
+                            let mut pr_tracker =
+                                PeerTracker::new(BitfieldOwned::new(num_pieces), msg_tx);
+                            pr_tracker.state.am_interested = true;
+
+                            pr_map_clone
+                                .lock()
+                                .await
+                                .insert(peer_id, SharedRw::new(pr_tracker));
+
+                            pch_handle.await
+                        }
+                        Err(str) => {
+                            warn!("{}", str);
+                            Ok(())
+                        }
+                    }
+                });
+                pch_handles.push(handle);
+            }
+
+            join_all(pch_handles).await;
+        })
+    }
+
+    pub async fn run(&self) {
         let pc_tracker = SharedRw::new(PieceTracker::new(
             self.torrent.info.len(),
             self.torrent.info.piece_len(),
             self.torrent.info.piece_hashes(),
         ));
-        let pct_clone = pc_tracker.clone();
 
         let mut file = fops::new_file(&self.torrent.info.filename()).await;
-        let (tx, mut rx) = mpsc::channel(40);
+        let (peer_tx, mut peer_rx) = mpsc::channel(40);
 
         let pr_map = SharedMut::new(HashMap::new());
 
-        let mut pch_handles = vec![];
-        let num_pieces = pc_tracker.get().await.metadata.num_pieces();
-        let hs_payload = self.hs_payload();
-
-        for peer in peer_list {
-            let pr_map_clone = pr_map.clone();
-            let tx_clone = tx.clone();
-
-            let pch_handle = tokio::spawn(async move {
-                match peer_protocol::spawn_prch(Peer::from(peer), tx_clone, hs_payload).await {
-                    Ok((peer_id, msg_tx, pch_handle)) => {
-                        let _ = msg_tx.send(Message::Interested).await;
-                        let mut pr_tracker =
-                            PeerTracker::new(BitfieldOwned::new(num_pieces), msg_tx);
-                        pr_tracker.state.am_interested = true;
-
-                        pr_map_clone
-                            .lock()
-                            .await
-                            .insert(peer_id, SharedRw::new(pr_tracker));
-
-                        pch_handle.await
-                    }
-                    Err(str) => {
-                        warn!("{}", str);
-                        Ok(())
-                    }
-                }
-            });
-
-            pch_handles.push(pch_handle);
-        }
-
-        let pr_map_clone = pr_map.clone();
+        let new_peers_handle = self
+            .handle_new_peers(
+                pr_map.clone(),
+                pc_tracker.get().await.metadata.num_pieces(),
+                peer_tx.clone(),
+            )
+            .await;
 
         let req_tracker = SharedRw::new(RequestsTracker::new(None));
-        let reqt_clone = req_tracker.clone();
 
         let mut pbuf = PieceBuffer::new();
 
@@ -199,8 +180,10 @@ impl Client {
             }
         });
 
-        let recv_handle = tokio::spawn(async move {
-            while let Some((peer_id, msg)) = rx.recv().await {
+        let rqh_handle = requests::spawn_reqh(pc_tracker.clone(), pr_map.clone(), req_tracker.clone());
+
+        let msg_handle = tokio::spawn(async move {
+            while let Some((peer_id, msg)) = peer_rx.recv().await {
                 if let Message::Piece(piece_index, offset_in_piece, buf) = msg {
                     let offset_in_buffer = pbuf.append(piece_index, &buf);
                     let rem = pc_tracker.get_mut().await.on_block_buffered(
@@ -264,9 +247,6 @@ impl Client {
             }
         });
 
-        let rqh_handle = requests::spawn_reqh(pct_clone, pr_map_clone, reqt_clone);
-
-        join_all(pch_handles).await;
-        join_all(vec![rqh_handle, recv_handle, stats_handle]).await;
+        join_all(vec![rqh_handle, msg_handle, stats_handle, new_peers_handle]).await;
     }
 }

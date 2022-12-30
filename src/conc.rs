@@ -1,5 +1,7 @@
-use std::sync::Arc;
-use tokio::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::{sync::Arc, time::Duration, future::Future};
+use tokio::{sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard}, time};
+
+use crate::error::Result;
 
 pub struct SharedMut<T> {
     inner: Arc<Mutex<T>>,
@@ -51,4 +53,11 @@ impl<T> SharedRw<T> {
     pub async fn get_mut(&self) -> RwLockWriteGuard<'_, T> {
         self.inner.write().await
     }
+}
+
+pub async fn timeout<F, T>(secs: u64, f: F) -> Result<T>
+where
+    F: Future<Output = Result<T>>,
+{
+    time::timeout(Duration::from_secs(secs), f).await.unwrap_or(Err(format!("timed out after {secs}s").into()))
 }

@@ -952,6 +952,7 @@ dependencies = [
  "log4rs",
  "priority-queue",
  "rand",
+ "regex",
  "reqwest",
  "serde",
  "serde_bencode",

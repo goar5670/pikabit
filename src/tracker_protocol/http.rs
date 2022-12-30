@@ -1,10 +1,13 @@
-
+use log::info;
 use reqwest;
 use serde_bytes::ByteBuf;
 use serde_derive::*;
 use serde_qs as qs;
 use std::net::Ipv4Addr;
 use urlencoding;
+use serde_bencode;
+
+use crate::error::Result;
 
 #[derive(Debug, Serialize)]
 pub enum Event {
@@ -18,12 +21,6 @@ pub enum Event {
 
 #[derive(Debug, Serialize)]
 pub struct Request {
-    #[serde(skip)]
-    base_url: String,
-    #[serde(skip)]
-    info_hash: [u8; 20],
-    #[serde(rename = "peer_id")]
-    client_id: String,
     port: u16,
     uploaded: u64,
     downloaded: u64,
@@ -35,54 +32,6 @@ pub struct Request {
     numwant: Option<u32>,
     key: Option<String>,
     tracker_id: Option<String>,
-}
-
-impl Request {
-    pub fn new(
-        base_url: String,
-        info_hash: [u8; 20],
-        client_id: String,
-        port: u16,
-        uploaded: u64,
-        downloaded: u64,
-        left: u64,
-        compact: u8,
-        no_peer_id: u8,
-        event: Option<Event>,
-        ip: Option<Ipv4Addr>,
-        numwant: Option<u32>,
-        key: Option<String>,
-        tracker_id: Option<String>,
-    ) -> Self {
-        Self {
-            base_url,
-            info_hash,
-            client_id,
-            port,
-            uploaded,
-            downloaded,
-            left,
-            compact,
-            no_peer_id,
-            event,
-            ip,
-            numwant,
-            key,
-            tracker_id,
-        }
-    }
-    pub async fn get(&self) -> Vec<u8> {
-        let encoded_info_hash = urlencoding::encode_binary(&self.info_hash);
-        let url = format!(
-            "{}?info_hash={}&{}",
-            self.base_url,
-            encoded_info_hash,
-            qs::to_string(&self).unwrap()
-        );
-        let response = reqwest::get(url).await.unwrap().bytes().await.unwrap();
-
-        Vec::from(response)
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,11 +55,53 @@ pub struct Response {
     peers: ByteBuf,
 }
 
-impl Response {
-    pub fn get_peers(&self) -> Vec<[u8; 6]> {
-        self.peers
-            .chunks(6)
-            .map(|chunck| chunck.try_into().unwrap())
-            .collect()
+pub struct HttpTracker {
+    url: String,
+}
+
+impl HttpTracker {
+    pub fn new(url: &str) -> Self {
+        Self {
+            url: url.to_owned(),
+        }
+    }
+
+    async fn announce(&self, info_hash: &[u8; 20], peer_id: &[u8; 20]) -> Result<Vec<u8>> {
+        let request = Request {
+            port: 6881,
+            downloaded: 0,
+            left: 100, // todo: send real left
+            uploaded: 0,
+            event: Some(Event::Started),
+            compact: 1,
+            no_peer_id: 1,
+            ip: None,
+            numwant: None,
+            key: None,
+            tracker_id: None,
+        };
+
+        let enc_info_hash = urlencoding::encode_binary(info_hash);
+        let enc_peer_id = urlencoding::encode_binary(peer_id);
+
+        let request_url = format!(
+            "{}?info_hash={}&peer_id={}&{}",
+            self.url,
+            enc_info_hash,
+            enc_peer_id,
+            qs::to_string(&request).unwrap(),
+        );
+
+        info!("{}", request_url);
+
+        let res = reqwest::get(request_url).await?.bytes().await?;
+
+        let de_res: Response = serde_bencode::from_bytes(&res)?;
+        
+        Ok(de_res.peers.to_vec())
+    }
+
+    pub async fn get_peers(&self, info_hash: &[u8; 20], peer_id: &[u8; 20]) -> Result<Vec<[u8; 6]>> {
+        Ok(super::parse_peers(&self.announce(info_hash, peer_id).await?))
     }
 }
