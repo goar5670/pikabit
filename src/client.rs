@@ -41,7 +41,7 @@ impl Client {
         let file: Vec<u8> = fs::read(filename).unwrap();
         let torrent: Metadata = serde_bencode::from_bytes(&file).unwrap();
 
-        let default_port = 6881;
+        let port = port.unwrap_or(6881);
 
         let pr_map = SharedMut::new(HashMap::new());
         let req_tracker = SharedRw::new(RequestsTracker::new(None));
@@ -59,10 +59,7 @@ impl Client {
             pc_tracker,
             peer_id: PeerId::new(),
             torrent,
-            port: match port {
-                Some(p) => p,
-                None => default_port,
-            },
+            port,
         }
     }
 
@@ -114,7 +111,7 @@ impl Client {
         }
     }
 
-    async fn handle_peer_msg(&self, mut peer_rx: Receiver<RelayedMessage>) -> JoinHandle<()> {
+    async fn handle_peer_com(&self, mut peer_rx: Receiver<RelayedMessage>) -> JoinHandle<()> {
         let pc_tracker = self.pc_tracker.clone();
         let req_tracker = self.req_tracker.clone();
         let stats_tracker = self.stats_tracker.clone();
@@ -188,7 +185,7 @@ impl Client {
         })
     }
 
-    async fn handle_new_peers(&self, peer_tx: Sender<RelayedMessage>) -> JoinHandle<()> {
+    async fn handle_tracker_com(&self, peer_tx: Sender<RelayedMessage>) -> JoinHandle<()> {
         let (tracker_tx, mut tracker_rx) = mpsc::channel(40);
 
         let num_pieces = self.pc_tracker.get().await.metadata.num_pieces();
@@ -251,14 +248,14 @@ impl Client {
     pub async fn run(&self) {
         let (peer_tx, peer_rx) = mpsc::channel(40);
 
-        let new_peers_handle = self.handle_new_peers(peer_tx.clone()).await;
+        let new_peers_handle = self.handle_tracker_com(peer_tx.clone()).await;
         let stats_handle = self.handle_stats();
         let rqh_handle = requests::spawn_reqh(
             self.pc_tracker.clone(),
             self.pr_map.clone(),
             self.req_tracker.clone(),
         );
-        let msg_handle = self.handle_peer_msg(peer_rx).await;
+        let msg_handle = self.handle_peer_com(peer_rx).await;
 
         join_all(vec![rqh_handle, msg_handle, stats_handle, new_peers_handle]).await;
     }

@@ -57,6 +57,7 @@ impl UdpTracker {
         cid: u64,
         info_hash: &Arc<[u8; 20]>,
         peer_id: &Arc<[u8; 20]>,
+        port: u16,
     ) -> Result<Vec<u8>> {
         let tid = rand::thread_rng().gen();
         let mut buf = vec![];
@@ -73,7 +74,7 @@ impl UdpTracker {
         let _ = buf.write_u32(0).await; // ip address
         let _ = buf.write_u32(0).await; // key
         let _ = buf.write_i32(-1).await; // numwant
-        let _ = buf.write_u16(6881).await; // port
+        let _ = buf.write_u16(port).await; // port
 
         assert_eq!(buf.len(), 98);
 
@@ -92,10 +93,11 @@ impl UdpTracker {
         &self,
         info_hash: &Arc<[u8; 20]>,
         peer_id: &Arc<[u8; 20]>,
+        port: u16,
     ) -> Result<Vec<[u8; 6]>> {
         let cid = self.connect().await?;
         Ok(super::parse_peers(
-            &self.announce(cid, info_hash, peer_id).await?,
+            &self.announce(cid, info_hash, peer_id, port).await?,
         ))
     }
 }

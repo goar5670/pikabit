@@ -38,10 +38,11 @@ impl Tracker {
         &self,
         info_hash: Arc<[u8; 20]>,
         peer_id: Arc<[u8; 20]>,
+        port: u16,
     ) -> Result<Vec<[u8; 6]>> {
         let peers_res = match self {
-            Self::Udp(u) => u.get_peers(&info_hash, &peer_id).await,
-            Self::Http(h) => h.get_peers(&info_hash, &peer_id).await,
+            Self::Udp(u) => u.get_peers(&info_hash, &peer_id, port).await,
+            Self::Http(h) => h.get_peers(&info_hash, &peer_id, port).await,
         };
 
         trace!("{:?}", peers_res);
@@ -75,7 +76,7 @@ pub async fn spawn_tch(
     tx: Sender<[u8; 6]>,
 ) {
     let info_hash = Arc::new(metadata.info.hash());
-    let socket = SharedMut::new(UdpSocket::bind("0.0.0.0:6881").await.unwrap());
+    let socket = SharedMut::new(UdpSocket::bind(format!("0.0.0.0:{port}")).await.unwrap());
 
     let mut handles = vec![];
 
@@ -98,7 +99,7 @@ pub async fn spawn_tch(
                         Protocol::HTTP => Tracker::new_http(&url),
                     };
 
-                    let peers = conc::timeout(3, tracker.get_peers(info_hash_clone, peer_id_clone))
+                    let peers = conc::timeout(3, tracker.get_peers(info_hash_clone, peer_id_clone, port))
                         .await
                         .unwrap_or(vec![]);
 

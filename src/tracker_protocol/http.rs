@@ -66,9 +66,9 @@ impl HttpTracker {
         }
     }
 
-    async fn announce(&self, info_hash: &[u8; 20], peer_id: &[u8; 20]) -> Result<Vec<u8>> {
+    async fn announce(&self, info_hash: &[u8; 20], peer_id: &[u8; 20], port: u16) -> Result<Vec<u8>> {
         let request = Request {
-            port: 6881,
+            port,
             downloaded: 0,
             left: 100, // todo: send real left
             uploaded: 0,
@@ -105,9 +105,10 @@ impl HttpTracker {
         &self,
         info_hash: &[u8; 20],
         peer_id: &[u8; 20],
+        port: u16,
     ) -> Result<Vec<[u8; 6]>> {
         Ok(super::parse_peers(
-            &self.announce(info_hash, peer_id).await?,
+            &self.announce(info_hash, peer_id, port).await?,
         ))
     }
 }
