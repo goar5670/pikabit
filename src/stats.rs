@@ -1,6 +1,6 @@
 use std::{
-    time::SystemTime,
     io::{stdout, Write},
+    time::SystemTime,
 };
 
 enum SpeedUnit {

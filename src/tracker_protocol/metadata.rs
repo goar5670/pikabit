@@ -70,7 +70,6 @@ pub struct Metadata {
     pub announce: Option<String>,
     #[serde(rename = "announce-list")]
     pub announce_list: Option<Vec<Vec<String>>>,
-
     // #[serde(default)]
     // nodes: Option<Vec<Node>>,
     // #[serde(default)]
@@ -106,10 +105,7 @@ mod test {
         let torrent: Metadata = serde_bencode::from_bytes(&file).unwrap();
 
         let info_hash = torrent.info.hash();
-        debug_assert_eq!(
-            hex::encode(info_hash),
-            INFO_HASH,
-        );
+        debug_assert_eq!(hex::encode(info_hash), INFO_HASH,);
         debug_assert_eq!(info_hash.len(), 20);
     }
 }

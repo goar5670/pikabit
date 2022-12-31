@@ -1,11 +1,11 @@
 use log::info;
 use reqwest;
+use serde_bencode;
 use serde_bytes::ByteBuf;
 use serde_derive::*;
 use serde_qs as qs;
 use std::net::Ipv4Addr;
 use urlencoding;
-use serde_bencode;
 
 use crate::error::Result;
 
@@ -97,11 +97,17 @@ impl HttpTracker {
         let res = reqwest::get(request_url).await?.bytes().await?;
 
         let de_res: Response = serde_bencode::from_bytes(&res)?;
-        
+
         Ok(de_res.peers.to_vec())
     }
 
-    pub async fn get_peers(&self, info_hash: &[u8; 20], peer_id: &[u8; 20]) -> Result<Vec<[u8; 6]>> {
-        Ok(super::parse_peers(&self.announce(info_hash, peer_id).await?))
+    pub async fn get_peers(
+        &self,
+        info_hash: &[u8; 20],
+        peer_id: &[u8; 20],
+    ) -> Result<Vec<[u8; 6]>> {
+        Ok(super::parse_peers(
+            &self.announce(info_hash, peer_id).await?,
+        ))
     }
 }

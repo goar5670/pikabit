@@ -1,10 +1,10 @@
-use std::sync::Arc;
 use byteorder::{BigEndian, ByteOrder};
 use rand::Rng;
+use std::sync::Arc;
 use tokio::{io::AsyncWriteExt, net::UdpSocket};
 
-use crate::error::{self, Result};
 use crate::conc::SharedMut;
+use crate::error::{self, Result};
 
 const PROTOCOL_ID: u64 = 4497486125440;
 
@@ -26,7 +26,7 @@ impl UdpTracker {
 
     async fn send_recv(&self, buf: &[u8]) -> Result<Vec<u8>> {
         let _ = self.socket.lock().await.send_to(&buf, &self.url).await?;
-    
+
         let mut buf = [0u8; 512];
         let (n, _) = self.socket.lock().await.recv_from(&mut buf).await?;
 
@@ -88,10 +88,14 @@ impl UdpTracker {
         Ok(res[20..].to_vec())
     }
 
-    pub async fn get_peers(&self, info_hash: &Arc<[u8; 20]>, peer_id: &Arc<[u8; 20]>) -> Result<Vec<[u8; 6]>> {
+    pub async fn get_peers(
+        &self,
+        info_hash: &Arc<[u8; 20]>,
+        peer_id: &Arc<[u8; 20]>,
+    ) -> Result<Vec<[u8; 6]>> {
         let cid = self.connect().await?;
-        Ok(super::parse_peers(&self.announce(cid, info_hash, peer_id).await?))
+        Ok(super::parse_peers(
+            &self.announce(cid, info_hash, peer_id).await?,
+        ))
     }
 }
-
-

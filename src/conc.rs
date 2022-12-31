@@ -1,5 +1,8 @@
-use std::{sync::Arc, time::Duration, future::Future};
-use tokio::{sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard}, time};
+use std::{future::Future, sync::Arc, time::Duration};
+use tokio::{
+    sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    time,
+};
 
 use crate::error::Result;
 
@@ -59,5 +62,7 @@ pub async fn timeout<F, T>(secs: u64, f: F) -> Result<T>
 where
     F: Future<Output = Result<T>>,
 {
-    time::timeout(Duration::from_secs(secs), f).await.unwrap_or(Err(format!("timed out after {secs}s").into()))
+    time::timeout(Duration::from_secs(secs), f)
+        .await
+        .unwrap_or(Err(format!("timed out after {secs}s").into()))
 }

@@ -5,7 +5,7 @@ use sha1::{Digest, Sha1};
 use std::{collections::HashMap, fs, mem, sync::Arc};
 use tokio::{
     fs::File,
-    sync::mpsc::{self, Sender, Receiver},
+    sync::mpsc::{self, Receiver, Sender},
     task::JoinHandle,
 };
 
@@ -21,8 +21,8 @@ use crate::peer_protocol::{
     PeerTracker,
 };
 use crate::stats::StatsTracker;
-use crate::tracker_protocol::spawn_tch;
 use crate::tracker_protocol::metadata::Metadata;
+use crate::tracker_protocol::spawn_tch;
 
 type PeerMap = HashMap<Arc<PeerId>, SharedRw<PeerTracker>>;
 
@@ -253,7 +253,11 @@ impl Client {
 
         let new_peers_handle = self.handle_new_peers(peer_tx.clone()).await;
         let stats_handle = self.handle_stats();
-        let rqh_handle = requests::spawn_reqh(self.pc_tracker.clone(), self.pr_map.clone(), self.req_tracker.clone());
+        let rqh_handle = requests::spawn_reqh(
+            self.pc_tracker.clone(),
+            self.pr_map.clone(),
+            self.req_tracker.clone(),
+        );
         let msg_handle = self.handle_peer_msg(peer_rx).await;
 
         join_all(vec![rqh_handle, msg_handle, stats_handle, new_peers_handle]).await;
