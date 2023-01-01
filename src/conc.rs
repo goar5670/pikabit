@@ -6,6 +6,7 @@ use tokio::{
 
 use crate::error::Result;
 
+#[derive(Debug)]
 pub struct SharedMut<T> {
     inner: Arc<Mutex<T>>,
 }
@@ -58,11 +59,33 @@ impl<T> SharedRw<T> {
     }
 }
 
-pub async fn timeout<F, T>(secs: u64, f: F) -> Result<T>
+pub trait IntoResult<T> {
+    fn into_res(self) -> Result<T>;
+}
+
+impl<T> IntoResult<T> for Option<T> {
+    fn into_res(self) -> Result<T> {
+        self.ok_or("None value".into())
+    }
+}
+
+impl<T, E> IntoResult<T> for std::result::Result<T, E>
 where
-    F: Future<Output = Result<T>>,
+    E: Into<Box<dyn std::error::Error>>,
 {
-    time::timeout(Duration::from_secs(secs), f)
-        .await
-        .unwrap_or(Err(format!("timed out after {secs}s").into()))
+    fn into_res(self) -> Result<T> {
+        self.map_err(|e| e.into())
+    }
+}
+
+pub async fn timeout<T, O, F>(secs: u64, f: F) -> Result<T>
+where
+    O: IntoResult<T>,
+    F: Future<Output = O>,
+{
+    let res = time::timeout(Duration::from_secs(secs), f).await;
+    match res {
+        Ok(x) => x.into_res(),
+        Err(_) => Err(format!("connectioned timed out after {secs}s").into()),
+    }
 }

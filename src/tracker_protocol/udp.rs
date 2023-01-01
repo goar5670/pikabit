@@ -1,9 +1,17 @@
 use byteorder::{BigEndian, ByteOrder};
 use rand::Rng;
+use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::{io::AsyncWriteExt, net::UdpSocket};
+use tokio::{
+    io::AsyncWriteExt,
+    net::UdpSocket,
+    sync::mpsc::{Receiver, Sender},
+    task::JoinHandle,
+    time::{self, Duration},
+};
 
-use crate::conc::SharedMut;
+use crate::conc::{self, SharedMut};
 use crate::error::{self, Result};
 
 const PROTOCOL_ID: u64 = 4497486125440;
@@ -11,29 +19,28 @@ const PROTOCOL_ID: u64 = 4497486125440;
 const ACTION_CONNECT: u32 = 0;
 const ACTION_ANNOUNCE: u32 = 1;
 
+#[derive(Debug)]
 pub struct UdpTracker {
-    url: String,
+    pub addr: SocketAddr,
     socket: SharedMut<UdpSocket>,
+    rx: Receiver<Vec<u8>>,
 }
 
 impl UdpTracker {
-    pub async fn new(url: &str, socket: &SharedMut<UdpSocket>) -> Self {
+    pub fn new(addr: SocketAddr, socket: &SharedMut<UdpSocket>, rx: Receiver<Vec<u8>>) -> Self {
         Self {
-            url: url.to_owned(),
+            addr,
             socket: socket.clone(),
+            rx,
         }
     }
 
-    async fn send_recv(&self, buf: &[u8]) -> Result<Vec<u8>> {
-        let _ = self.socket.lock().await.send_to(&buf, &self.url).await?;
-
-        let mut buf = [0u8; 512];
-        let (n, _) = self.socket.lock().await.recv_from(&mut buf).await?;
-
-        Ok(buf[..n].to_vec())
+    async fn send_recv(&mut self, buf: &[u8]) -> Result<Vec<u8>> {
+        let _ = conc::timeout(5, self.socket.lock().await.send_to(&buf, &self.addr)).await?;
+        conc::timeout(5, self.rx.recv()).await
     }
 
-    async fn connect(&self) -> Result<u64> {
+    async fn connect(&mut self) -> Result<u64> {
         let mut buf = vec![];
         let tid = rand::thread_rng().gen();
 
@@ -53,7 +60,7 @@ impl UdpTracker {
     }
 
     async fn announce(
-        &self,
+        &mut self,
         cid: u64,
         info_hash: &Arc<[u8; 20]>,
         peer_id: &Arc<[u8; 20]>,
@@ -67,8 +74,7 @@ impl UdpTracker {
         buf.extend(info_hash.iter());
         buf.extend(peer_id.iter());
         let _ = buf.write_u64(0).await; // downloaded
-        // todo: send real left
-        let _ = buf.write_u64(100).await; // left
+        let _ = buf.write_u64(100).await; // left // todo: send real left
         let _ = buf.write_u64(0).await; // uploaded
         let _ = buf.write_u32(2).await; // event
         let _ = buf.write_u32(0).await; // ip address
@@ -90,7 +96,7 @@ impl UdpTracker {
     }
 
     pub async fn get_peers(
-        &self,
+        &mut self,
         info_hash: &Arc<[u8; 20]>,
         peer_id: &Arc<[u8; 20]>,
         port: u16,
@@ -100,4 +106,26 @@ impl UdpTracker {
             &self.announce(cid, info_hash, peer_id, port).await?,
         ))
     }
+}
+
+pub async fn spawn_udp_rh(
+    tracker_map: HashMap<SocketAddr, Sender<Vec<u8>>>,
+    socket: SharedMut<UdpSocket>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut buf = [0u8; 512];
+        loop {
+            let res = socket.lock().await.try_recv_from(&mut buf);
+            if res
+                .as_ref()
+                .is_err_and(|e| e.kind() == std::io::ErrorKind::WouldBlock)
+            {
+                time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+            if let Ok((n, addr)) = res && let Some(tx) = tracker_map.get(&addr) {
+                let _ = tx.send(buf[..n].to_vec()).await;
+            }
+        }
+    })
 }

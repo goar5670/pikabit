@@ -1,3 +1,6 @@
+#![feature(is_some_and)]
+#![feature(let_chains)]
+
 pub mod bitfield;
 pub mod client;
 pub mod common;

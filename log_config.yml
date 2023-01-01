@@ -11,6 +11,6 @@ appenders:
       roller:
         kind: delete
 root:
-  level: info
+  level: trace
   appenders:
     - file_logger

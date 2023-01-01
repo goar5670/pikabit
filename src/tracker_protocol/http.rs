@@ -55,6 +55,7 @@ pub struct Response {
     peers: ByteBuf,
 }
 
+#[derive(Debug)]
 pub struct HttpTracker {
     url: String,
 }
@@ -66,7 +67,12 @@ impl HttpTracker {
         }
     }
 
-    async fn announce(&self, info_hash: &[u8; 20], peer_id: &[u8; 20], port: u16) -> Result<Vec<u8>> {
+    async fn announce(
+        &self,
+        info_hash: &[u8; 20],
+        peer_id: &[u8; 20],
+        port: u16,
+    ) -> Result<Vec<u8>> {
         let request = Request {
             port,
             downloaded: 0,
