@@ -1,19 +1,20 @@
 use futures::future::join_all;
 use log::trace;
 use regex::Regex;
-use std::net::{SocketAddr, ToSocketAddrs};
-use std::{collections::HashMap, sync::Arc};
-use tokio::sync::mpsc;
+use std::{
+    collections::HashMap,
+    net::{SocketAddr, ToSocketAddrs},
+    sync::Arc,
+};
 
 use http::HttpTracker;
 use tokio::{
     net::UdpSocket,
-    sync::mpsc::{Receiver, Sender},
+    sync::mpsc::{self, Receiver, Sender},
 };
 
 use self::udp::{spawn_udp_rh, UdpTracker};
-use crate::conc::SharedMut;
-use crate::error::Result;
+use crate::{conc::SharedMut, error::Result};
 
 pub mod http;
 pub mod metadata;

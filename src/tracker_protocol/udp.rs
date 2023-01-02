@@ -1,8 +1,6 @@
 use byteorder::{BigEndian, ByteOrder};
 use rand::Rng;
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::{
     io::AsyncWriteExt,
     net::UdpSocket,
@@ -11,8 +9,10 @@ use tokio::{
     time::{self, Duration},
 };
 
-use crate::conc::{self, SharedMut};
-use crate::error::{self, Result};
+use crate::{
+    conc::{self, SharedMut},
+    error::{self, Result},
+};
 
 const PROTOCOL_ID: u64 = 4497486125440;
 
