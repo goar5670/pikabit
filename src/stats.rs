@@ -40,6 +40,7 @@ impl Speed {
     }
 }
 
+// todo: refine it to work with pieces instead of bytes
 pub struct StatsTracker {
     downloaded: u64,
     latent: u64,

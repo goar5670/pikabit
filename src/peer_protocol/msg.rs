@@ -73,11 +73,9 @@ pub fn spawn_rh(mut read_half: tcp::OwnedReadHalf, peer_tx: Sender<Message>) -> 
             }
 
             let msg_id = buf[0];
-            debug!(
-                "received msg id: {}, {:?}",
-                msg_id,
-                &buf[1..cmp::min(buf.len(), 12)]
-            );
+            if msg_id != msg_ids::PIECE {
+                debug!("received msg id: {}, {:?}", msg_id, &buf);
+            }
 
             let msg = match msg_id {
                 msg_ids::CHOKE => Message::Choke,

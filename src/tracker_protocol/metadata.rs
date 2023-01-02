@@ -9,26 +9,26 @@ use sha1::{Digest, Sha1};
 // struct Node(String, i64);
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct File {
-    path: Vec<String>,
-    length: i64,
+pub struct FileInfo {
+    pub path: Vec<String>,
+    pub length: u64,
     #[serde(default)]
     md5sum: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Info {
-    name: String,
-    pieces: ByteBuf,
+    pub name: String,
+    pub pieces: ByteBuf,
     #[serde(rename = "piece length")]
     piece_length: u32,
+    #[serde(default)]
+    pub length: Option<u64>,
+    #[serde(default)]
+    pub files: Option<Vec<FileInfo>>,
 
     #[serde(default)]
     md5sum: Option<String>,
-    #[serde(default)]
-    length: Option<u64>,
-    #[serde(default)]
-    files: Option<Vec<File>>,
     #[serde(default)]
     private: Option<u8>,
     #[serde(default)]
@@ -44,7 +44,13 @@ impl Info {
     }
 
     pub fn len(&self) -> u64 {
-        self.length.unwrap()
+        self.length.unwrap_or_else(|| {
+            self.files
+                .as_ref()
+                .unwrap()
+                .iter()
+                .fold(0, |acc, f| f.length + acc)
+        })
     }
 
     pub fn filename(&self) -> &String {

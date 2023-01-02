@@ -1,4 +1,4 @@
-use log::{info, warn};
+use log::{info, trace, warn};
 use std::{cmp, collections::HashMap, sync::Arc};
 use tokio::{sync::mpsc::Sender, task::JoinHandle};
 
@@ -65,6 +65,7 @@ pub fn spawn_reqh(
             while pc_tracker.get().await.is_empty() {}
 
             let next_piece = pc_tracker.get_mut().await.next_piece();
+            trace!("next piece to request {:?}", next_piece);
             if let Some(piece_index) = next_piece {
                 'outer: loop {
                     for (peer_id, pr_tracker) in pr_map.lock().await.iter() {

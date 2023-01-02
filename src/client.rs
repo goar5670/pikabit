@@ -4,25 +4,25 @@ use serde_bencode;
 use sha1::{Digest, Sha1};
 use std::{collections::HashMap, fs, mem, sync::Arc};
 use tokio::{
-    fs::File,
     sync::mpsc::{self, Receiver, Sender},
     task::JoinHandle,
 };
 
-use crate::bitfield::*;
-use crate::conc::{SharedMut, SharedRw};
-use crate::peer_protocol::RelayedMessage;
-use crate::peer_protocol::{
-    self, fops,
-    msg::Message,
-    peer::{Peer, PeerId},
-    piece::{PieceBuffer, PieceTracker},
-    requests::{self, RequestsTracker},
-    PeerTracker,
+use crate::{
+    bitfield::*,
+    conc::{SharedMut, SharedRw},
+    peer_protocol::{
+        self,
+        fops::FileManager,
+        msg::Message,
+        peer::{Peer, PeerId},
+        piece::{PieceBuffer, PieceTracker},
+        requests::{self, RequestsTracker},
+        PeerTracker, RelayedMessage,
+    },
+    stats::StatsTracker,
+    tracker_protocol::{metadata::Metadata, spawn_tch},
 };
-use crate::stats::StatsTracker;
-use crate::tracker_protocol::metadata::Metadata;
-use crate::tracker_protocol::spawn_tch;
 
 type PeerMap = HashMap<Arc<PeerId>, SharedRw<PeerTracker>>;
 
@@ -84,7 +84,7 @@ impl Client {
         pbuf: &PieceBuffer,
         req_tracker: &SharedRw<RequestsTracker>,
         stats_tracker: &SharedMut<StatsTracker>,
-        file: &mut File,
+        fman: &mut FileManager,
         piece_index: u32,
         peer_id: &Arc<PeerId>,
     ) {
@@ -95,7 +95,8 @@ impl Client {
             warn!("hash verification failed for piece {piece_index}");
             lock.update_single(piece_index);
         } else {
-            fops::write_piece(file, lock.metadata.piece_offset(piece_index), &piece).await;
+            fman.write_piece(lock.metadata.piece_offset(piece_index), &piece)
+                .await;
             lock.on_piece_saved(piece_index);
             let rem = lock.rem();
             mem::drop(lock);
@@ -116,7 +117,7 @@ impl Client {
         let req_tracker = self.req_tracker.clone();
         let stats_tracker = self.stats_tracker.clone();
         let pr_map = self.pr_map.clone();
-        let mut file = fops::new_file(&self.torrent.info.filename()).await;
+        let mut fman = FileManager::new(&self.torrent.info).await;
 
         tokio::spawn(async move {
             let mut pbuf = PieceBuffer::new();
@@ -136,7 +137,7 @@ impl Client {
                             &pbuf,
                             &req_tracker,
                             &stats_tracker,
-                            &mut file,
+                            &mut fman,
                             piece_index,
                             &peer_id,
                         )
