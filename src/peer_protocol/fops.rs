@@ -11,7 +11,10 @@ async fn new_file(base_dir: &str, path: &Vec<String>) -> File {
     let filename = path.last().unwrap();
     let dir = &path[..path.len() as usize - 1];
 
-    let dir_path = "resources/".to_owned() + base_dir + "/" + &dir.join("/");
+    let mut dir_path = "resources/".to_owned() + base_dir + "/";
+    if !dir.is_empty() {
+        dir_path = dir_path + &dir.join("/") + "/";
+    }
 
     let _ = std::fs::create_dir_all(&dir_path);
 
