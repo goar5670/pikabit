@@ -11,6 +11,7 @@ use http::HttpTracker;
 use tokio::{
     net::UdpSocket,
     sync::mpsc::{self, Receiver, Sender},
+    task::JoinHandle,
 };
 
 use self::udp::{spawn_udp_rh, UdpTracker};
@@ -95,11 +96,9 @@ pub async fn spawn_tch(
     peer_id: Arc<[u8; 20]>,
     port: u16,
     client_tx: Sender<[u8; 6]>,
-) {
+) -> JoinHandle<()> {
     let info_hash = Arc::new(metadata.info.hash());
     let socket = SharedMut::new(UdpSocket::bind(format!("0.0.0.0:{port}")).await.unwrap());
-
-    let mut handles = vec![];
 
     let peers_map: SharedMut<HashMap<[u8; 6], bool>> = SharedMut::new(HashMap::new());
 
@@ -131,30 +130,33 @@ pub async fn spawn_tch(
         .flatten()
         .collect();
 
-    spawn_udp_rh(tracker_map, socket.clone()).await;
-
-    trackers_list.into_iter().for_each(|mut tracker| {
-        let client_tx_clone = client_tx.clone();
-        let info_hash_clone = info_hash.clone();
-        let peer_id_clone = peer_id.clone();
-        let pm_clone = peers_map.clone();
-
-        let handle = tokio::spawn(async move {
-            let peers = tracker
-                .get_peers(info_hash_clone, peer_id_clone, port)
-                .await
-                .unwrap_or(vec![]);
-
-            for addr in peers {
-                trace!("new peer {:?}", addr);
-                if !pm_clone.lock().await.contains_key(&addr) {
-                    let _ = client_tx_clone.send(addr).await;
-                    pm_clone.lock().await.insert(addr, true);
+    spawn_udp_rh(tracker_map, socket.clone());
+    
+    tokio::spawn(async move {
+        let mut handles = vec![];
+        trackers_list.into_iter().for_each(|mut tracker| {
+            let client_tx_clone = client_tx.clone();
+            let info_hash_clone = info_hash.clone();
+            let peer_id_clone = peer_id.clone();
+            let pm_clone = peers_map.clone();
+    
+            let handle = tokio::spawn(async move {
+                let peers = tracker
+                    .get_peers(info_hash_clone, peer_id_clone, port)
+                    .await
+                    .unwrap_or(vec![]);
+    
+                for addr in peers {
+                    trace!("new peer {:?}", addr);
+                    if !pm_clone.lock().await.contains_key(&addr) {
+                        let _ = client_tx_clone.send(addr).await;
+                        pm_clone.lock().await.insert(addr, true);
+                    }
                 }
-            }
+            });
+            handles.push(handle);
         });
-        handles.push(handle);
-    });
 
-    join_all(handles).await;
+        join_all(handles).await;
+    })
 }

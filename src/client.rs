@@ -249,15 +249,15 @@ impl Client {
     pub async fn run(&self) {
         let (peer_tx, peer_rx) = mpsc::channel(40);
 
-        let new_peers_handle = self.handle_tracker_com(peer_tx.clone()).await;
-        let stats_handle = self.handle_stats();
-        let rqh_handle = requests::spawn_reqh(
-            self.pc_tracker.clone(),
-            self.pr_map.clone(),
-            self.req_tracker.clone(),
-        );
-        let msg_handle = self.handle_peer_com(peer_rx).await;
-
-        join_all(vec![rqh_handle, msg_handle, stats_handle, new_peers_handle]).await;
+        let _ = tokio::select! {
+            h = self.handle_tracker_com(peer_tx.clone()).await => h,
+            h = self.handle_stats() => h,
+            h = self.handle_peer_com(peer_rx).await => h,
+            h = requests::spawn_reqh(
+                self.pc_tracker.clone(),
+                self.pr_map.clone(),
+                self.req_tracker.clone()
+            ) => h,
+        };
     }
 }

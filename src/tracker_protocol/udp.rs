@@ -108,7 +108,7 @@ impl UdpTracker {
     }
 }
 
-pub async fn spawn_udp_rh(
+pub fn spawn_udp_rh(
     tracker_map: HashMap<SocketAddr, Sender<Vec<u8>>>,
     socket: SharedMut<UdpSocket>,
 ) -> JoinHandle<()> {
