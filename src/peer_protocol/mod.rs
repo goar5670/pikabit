@@ -2,7 +2,7 @@
 // todo: implement block pipelining (from bep 3) | priority: low
 
 use futures::future::join_all;
-use log::{error, warn};
+use log::{error, trace, warn};
 use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -11,7 +11,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::bitfield::*;
+use crate::{bitfield::*, error};
 use peer::{Peer, PeerId};
 
 use msg::Message;
@@ -29,7 +29,11 @@ pub async fn spawn_prch(
 ) -> Result<(Arc<PeerId>, Sender<Message>, JoinHandle<()>), String> {
     let mut stream = peer.connect().await?;
 
-    let peer_id = Arc::new(handshake(&handshake_payload, &mut stream).await);
+    let peer_id = Arc::new(
+        handshake(&handshake_payload, &mut stream)
+            .await
+            .map_err(|e| format!("{:?}", e))?,
+    );
     peer.set_id(peer_id.clone());
 
     let (read_half, write_half) = stream.into_split();
@@ -43,8 +47,10 @@ pub async fn spawn_prch(
         while let Some(msg) = rx.recv().await {
             let _ = client_tx.send((peer.get_id().unwrap(), msg)).await;
         }
-
-        join_all(vec![sh_handle, rh_handle]).await;
+        tokio::select! {
+            _ = sh_handle => (),
+            _ = rh_handle => (),
+        }
     });
 
     Ok((peer_id, msg_tx, join_handle))
@@ -73,14 +79,14 @@ fn verify_handshake(received: &[u8], sent: &[u8]) -> Result<[u8; 20], &'static s
     Ok(received[received.len() - 20..].try_into().unwrap())
 }
 
-async fn handshake(payload: &[u8; 68], stream: &mut TcpStream) -> PeerId {
-    let _ = stream.write(payload).await;
+async fn handshake(payload: &[u8; 68], stream: &mut TcpStream) -> error::Result<PeerId> {
+    stream.write(payload).await?;
 
     let mut buf = [0u8; 68];
-    let _ = stream.read_exact(&mut buf).await.unwrap();
+    stream.read_exact(&mut buf).await?;
 
     let peer_id = verify_handshake(&buf, payload).unwrap();
-    PeerId::from(&peer_id)
+    Ok(PeerId::from(&peer_id))
 }
 
 pub type RelayedMessage = (Arc<PeerId>, Message);

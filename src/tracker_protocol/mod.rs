@@ -2,7 +2,7 @@ use futures::future::join_all;
 use log::trace;
 use regex::Regex;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::{SocketAddr, ToSocketAddrs},
     sync::Arc,
 };
@@ -53,9 +53,20 @@ impl Tracker {
             Self::Http(h) => h.get_peers(&info_hash, &peer_id, port).await,
         };
 
-        trace!("tracker: {:?}, error: {:?}", self, peers_res);
+        if peers_res.is_err() {
+            trace!("tracker: {}, error: {:?}", self.to_string(), peers_res);
+        }
 
         peers_res
+    }
+}
+
+impl ToString for Tracker {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Udp(t) => format!("{:?}", t.addr),
+            Self::Http(t) => format!("{:?}", t),
+        }
     }
 }
 
@@ -100,7 +111,7 @@ pub async fn spawn_tch(
     let info_hash = Arc::new(metadata.info.hash());
     let socket = SharedMut::new(UdpSocket::bind(format!("0.0.0.0:{port}")).await.unwrap());
 
-    let peers_map: SharedMut<HashMap<[u8; 6], bool>> = SharedMut::new(HashMap::new());
+    let peers_map: SharedMut<HashSet<[u8; 6]>> = SharedMut::new(HashSet::new());
 
     let announce_list = full_announce_list(metadata);
 
@@ -131,7 +142,7 @@ pub async fn spawn_tch(
         .collect();
 
     spawn_udp_rh(tracker_map, socket.clone());
-    
+
     tokio::spawn(async move {
         let mut handles = vec![];
         trackers_list.into_iter().for_each(|mut tracker| {
@@ -139,18 +150,18 @@ pub async fn spawn_tch(
             let info_hash_clone = info_hash.clone();
             let peer_id_clone = peer_id.clone();
             let pm_clone = peers_map.clone();
-    
+
             let handle = tokio::spawn(async move {
                 let peers = tracker
                     .get_peers(info_hash_clone, peer_id_clone, port)
                     .await
                     .unwrap_or(vec![]);
-    
+
                 for addr in peers {
-                    trace!("new peer {:?}", addr);
-                    if !pm_clone.lock().await.contains_key(&addr) {
+                    if !pm_clone.lock().await.contains(&addr) {
+                        trace!("new peer {:?} from {}", addr, tracker.to_string());
+                        pm_clone.lock().await.insert(addr);
                         let _ = client_tx_clone.send(addr).await;
-                        pm_clone.lock().await.insert(addr, true);
                     }
                 }
             });

@@ -1,4 +1,4 @@
-use std::cmp;
+use std::io::{self, ErrorKind};
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -9,7 +9,7 @@ use tokio::{
 };
 
 use byteorder::{BigEndian, ByteOrder};
-use log::{debug, error};
+use log::{error, info, trace, warn};
 
 use crate::constants::msg_ids;
 
@@ -62,10 +62,19 @@ impl Message {
 pub fn spawn_rh(mut read_half: tcp::OwnedReadHalf, peer_tx: Sender<Message>) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            let n: u32 = recv_len(&mut read_half).await;
-            if n == 0 {
+            let res = recv_len(&mut read_half).await;
+
+            if res
+                .as_ref()
+                .is_err_and(|e| e.kind() == ErrorKind::UnexpectedEof)
+            {
+                break;
+            } else if res.is_err() {
+                warn!("{:?}", res);
                 continue;
             }
+
+            let n = res.unwrap();
 
             let mut buf: Vec<u8> = vec![0; n as usize];
             if !recv(&mut read_half, &mut buf).await {
@@ -74,7 +83,13 @@ pub fn spawn_rh(mut read_half: tcp::OwnedReadHalf, peer_tx: Sender<Message>) -> 
 
             let msg_id = buf[0];
             if msg_id != msg_ids::PIECE {
-                debug!("received msg id: {}, {:?}", msg_id, &buf);
+                info!("received msg id: {}, {:?}", msg_id, &buf);
+            } else {
+                trace!(
+                    "received block: {} {}",
+                    BigEndian::read_u32(&buf[..4]),
+                    BigEndian::read_u32(&buf[4..8])
+                );
             }
 
             let msg = match msg_id {
@@ -97,11 +112,11 @@ pub fn spawn_rh(mut read_half: tcp::OwnedReadHalf, peer_tx: Sender<Message>) -> 
     })
 }
 
-async fn recv_len(read_half: &mut tcp::OwnedReadHalf) -> u32 {
+async fn recv_len(read_half: &mut tcp::OwnedReadHalf) -> io::Result<u32> {
     let mut buf = [0u8; 4];
-    let _ = read_half.read_exact(&mut buf).await.unwrap();
+    let n = read_half.read_exact(&mut buf).await?;
 
-    BigEndian::read_u32(&buf)
+    Ok(BigEndian::read_u32(&buf))
 }
 
 async fn recv(read_half: &mut tcp::OwnedReadHalf, buf: &mut [u8]) -> bool {
@@ -112,7 +127,7 @@ async fn recv(read_half: &mut tcp::OwnedReadHalf, buf: &mut [u8]) -> bool {
             n,
             buf.len()
         );
-        error!("{:?}", &buf[..20]);
+        error!("{:?}", &buf);
     }
 
     n == buf.len()

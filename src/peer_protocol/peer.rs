@@ -52,12 +52,6 @@ impl From<&[u8; 20]> for PeerId {
     }
 }
 
-impl ToString for PeerId {
-    fn to_string(&self) -> String {
-        String::from_utf8(self.inner.to_vec()).unwrap()
-    }
-}
-
 impl Debug for PeerId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let id_str = String::from_utf8(self.inner.to_vec())

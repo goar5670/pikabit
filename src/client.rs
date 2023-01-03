@@ -1,5 +1,5 @@
 use futures::future::join_all;
-use log::{info, warn};
+use log::{info, trace, warn};
 use serde_bencode;
 use sha1::{Digest, Sha1};
 use std::{collections::HashMap, fs, mem, sync::Arc};
@@ -211,6 +211,10 @@ impl Client {
                 let handle = tokio::spawn(async move {
                     match peer_protocol::spawn_prch(Peer::from(addr), tx_clone, hs_payload).await {
                         Ok((peer_id, msg_tx, pch_handle)) => {
+                            if pr_map_clone.lock().await.contains_key(&peer_id) {
+                                return Ok(());
+                            }
+
                             let _ = msg_tx.send(Message::Interested).await;
                             let mut pr_tracker =
                                 PeerTracker::new(BitfieldOwned::new(num_pieces), msg_tx);
@@ -224,7 +228,7 @@ impl Client {
                             pch_handle.await
                         }
                         Err(str) => {
-                            warn!("{}", str);
+                            warn!("prch error {}", str);
                             Ok(())
                         }
                     }
