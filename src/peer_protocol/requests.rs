@@ -2,7 +2,8 @@ use log::{info, trace, warn};
 use std::{cmp, collections::HashMap, sync::Arc};
 use tokio::{sync::mpsc::Sender, task::JoinHandle};
 
-use crate::conc::{SharedMut, SharedRw};
+use crate::bitfield::Bitfield;
+use crate::conc::SharedRw;
 
 use super::msg::Message;
 use super::peer::PeerId;
@@ -57,7 +58,7 @@ impl RequestsTracker {
 
 pub fn spawn_reqh(
     pc_tracker: SharedRw<PieceTracker>,
-    pr_map: SharedMut<HashMap<Arc<PeerId>, SharedRw<PeerTracker>>>,
+    pr_map: SharedRw<HashMap<Arc<PeerId>, SharedRw<PeerTracker>>>,
     req_tracker: SharedRw<RequestsTracker>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -67,45 +68,61 @@ pub fn spawn_reqh(
             let next_piece = pc_tracker.get_mut().await.next_piece();
             trace!("next piece to request {:?}", next_piece);
             if let Some(piece_index) = next_piece {
-                'outer: loop {
-                    for (peer_id, pr_tracker) in pr_map.lock().await.iter() {
-                        if !req_tracker.get().await.full(peer_id)
-                            && !pr_tracker.get_mut().await.state.am_choked
-                        {
-                            req_tracker.get_mut().await.increase(peer_id.clone());
-                            let (piece_length, block_size) = async {
-                                let lock = pc_tracker.get().await;
-                                (
-                                    lock.metadata.piece_len(piece_index),
-                                    lock.metadata.block_size(),
-                                )
-                            }
-                            .await;
-                            request_piece(
-                                piece_index,
-                                piece_length,
-                                block_size,
-                                &pr_tracker.get().await.msg_tx,
-                            )
-                            .await;
-                            pc_tracker.get_mut().await.on_piece_requested(piece_index);
-                            info!(
-                                "peer_id: {:?}, requested piece {}, reqt_len: {}, rem: {}",
-                                peer_id,
-                                piece_index,
-                                req_tracker.get().await.cnt(peer_id),
-                                pc_tracker.get().await.pieces_pq.len()
-                            );
-                            break 'outer;
-                        }
-                    }
-                }
+                request_piece(
+                    piece_index,
+                    req_tracker.clone(),
+                    pr_map.clone(),
+                    pc_tracker.clone(),
+                )
+                .await;
             }
         }
     })
 }
 
 async fn request_piece(
+    piece_index: u32,
+    req_tracker: SharedRw<RequestsTracker>,
+    pr_map: SharedRw<HashMap<Arc<PeerId>, SharedRw<PeerTracker>>>,
+    pc_tracker: SharedRw<PieceTracker>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        for (peer_id, pr_tracker) in pr_map.get().await.iter().cycle() {
+            if !req_tracker.get().await.full(peer_id)
+                && !pr_tracker.get_mut().await.state.am_choked
+                && pr_tracker.get().await.have.get(piece_index).unwrap_or(false)
+            {
+                req_tracker.get_mut().await.increase(peer_id.clone());
+                let (piece_length, block_size) = async {
+                    let reader = pc_tracker.get().await;
+                    (
+                        reader.metadata.piece_len(piece_index),
+                        reader.metadata.block_size(),
+                    )
+                }
+                .await;
+                send_piece_requests(
+                    piece_index,
+                    piece_length,
+                    block_size,
+                    &pr_tracker.get().await.msg_tx,
+                )
+                .await;
+                pc_tracker.get_mut().await.on_piece_requested(piece_index);
+                info!(
+                    "peer_id: {:?}, requested piece {}, reqt_len: {}, rem: {}",
+                    peer_id,
+                    piece_index,
+                    req_tracker.get().await.cnt(peer_id),
+                    pc_tracker.get().await.pieces_pq.len()
+                );
+                return;
+            }
+        }
+    })
+}
+
+async fn send_piece_requests(
     piece_index: u32,
     piece_length: u32,
     block_size: u32,

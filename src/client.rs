@@ -27,7 +27,7 @@ use crate::{
 type PeerMap = HashMap<Arc<PeerId>, SharedRw<PeerTracker>>;
 
 pub struct Client {
-    pr_map: SharedMut<PeerMap>,
+    pr_map: SharedRw<PeerMap>,
     req_tracker: SharedRw<RequestsTracker>,
     stats_tracker: SharedMut<StatsTracker>,
     pc_tracker: SharedRw<PieceTracker>,
@@ -43,7 +43,7 @@ impl Client {
 
         let port = port.unwrap_or(6881);
 
-        let pr_map = SharedMut::new(HashMap::new());
+        let pr_map = SharedRw::new(HashMap::new());
         let req_tracker = SharedRw::new(RequestsTracker::new(None));
         let stats_tracker = SharedMut::new(StatsTracker::new(None, torrent.info.len()));
         let pc_tracker = SharedRw::new(PieceTracker::new(
@@ -122,12 +122,13 @@ impl Client {
         tokio::spawn(async move {
             let mut pbuf = PieceBuffer::new();
             while let Some((peer_id, msg)) = peer_rx.recv().await {
-                if let Message::Piece(piece_index, offset_in_piece, buf) = msg {
-                    let offset_in_buffer = pbuf.append(piece_index, &buf);
+                if let Message::Piece(piece_index, offset_in_piece, buf) = &msg
+                    && !pc_tracker.get().await.has_piece(*piece_index).unwrap_or(true) {
+                    let offset_in_buffer = pbuf.append(*piece_index, buf);
                     let rem = pc_tracker.get_mut().await.on_block_buffered(
-                        piece_index,
+                        *piece_index,
                         offset_in_buffer,
-                        offset_in_piece,
+                        *offset_in_piece,
                         buf.len(),
                     );
 
@@ -138,14 +139,14 @@ impl Client {
                             &req_tracker,
                             &stats_tracker,
                             &mut fman,
-                            piece_index,
+                            *piece_index,
                             &peer_id,
                         )
                         .await;
                     }
                 } else {
-                    let mut lock = pr_map.lock().await;
-                    let mut pr_tracker = lock.get_mut(&peer_id).unwrap().get_mut().await;
+                    let mut writer = pr_map.get_mut().await;
+                    let mut pr_tracker = writer.get_mut(&peer_id).unwrap().get_mut().await;
                     match msg {
                         Message::Have(piece_index) => {
                             if !pr_tracker.state.am_choked && pr_tracker.state.am_interested {
@@ -162,6 +163,12 @@ impl Client {
                                 pc_tracker.get().await.metadata.num_pieces(),
                             )
                             .into();
+                            println!(
+                                "peer {:?} has {}/{}",
+                                peer_id,
+                                pr_tracker.have.cnt_marked(),
+                                pc_tracker.get().await.metadata.num_pieces()
+                            );
                         }
                         Message::Choke => pr_tracker.state.am_choked = true,
                         Message::Unchoke => {
@@ -179,6 +186,9 @@ impl Client {
                         }
                         Message::Interested => pr_tracker.state.peer_interested = true,
                         Message::NotInterested => pr_tracker.state.peer_interested = false,
+                        Message::Cancel(piece_index, offset_in_piece, length) => {
+                            warn!("cancel {} {} {}", piece_index, offset_in_piece, length);
+                        }
                         _ => {}
                     }
                 }
@@ -211,7 +221,7 @@ impl Client {
                 let handle = tokio::spawn(async move {
                     match peer_protocol::spawn_prch(Peer::from(addr), tx_clone, hs_payload).await {
                         Ok((peer_id, msg_tx, pch_handle)) => {
-                            if pr_map_clone.lock().await.contains_key(&peer_id) {
+                            if pr_map_clone.get().await.contains_key(&peer_id) {
                                 return Ok(());
                             }
 
@@ -221,7 +231,7 @@ impl Client {
                             pr_tracker.state.am_interested = true;
 
                             pr_map_clone
-                                .lock()
+                                .get_mut()
                                 .await
                                 .insert(peer_id, SharedRw::new(pr_tracker));
 

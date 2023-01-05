@@ -249,6 +249,10 @@ impl PieceTracker {
     pub fn is_empty(&self) -> bool {
         self.pieces_pq.is_empty()
     }
+
+    pub fn has_piece(&self, piece_index: u32) -> Option<bool> {
+        self.have.get(piece_index)
+    }
 }
 
 pub struct PieceBuffer {

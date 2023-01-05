@@ -24,6 +24,7 @@ pub enum Message {
     Bitfield(Vec<u8>),
     Request(u32, u32, u32),
     Piece(u32, u32, Vec<u8>),
+    Cancel(u32, u32, u32),
     Empty,
 }
 
@@ -76,6 +77,10 @@ pub fn spawn_rh(mut read_half: tcp::OwnedReadHalf, peer_tx: Sender<Message>) -> 
 
             let n = res.unwrap();
 
+            if n == 0 {
+                continue;
+            }
+
             let mut buf: Vec<u8> = vec![0; n as usize];
             if !recv(&mut read_half, &mut buf).await {
                 return;
@@ -92,6 +97,7 @@ pub fn spawn_rh(mut read_half: tcp::OwnedReadHalf, peer_tx: Sender<Message>) -> 
                 );
             }
 
+            // todo: deserialize
             let msg = match msg_id {
                 msg_ids::CHOKE => Message::Choke,
                 msg_ids::UNCHOKE => Message::Unchoke,
@@ -101,6 +107,11 @@ pub fn spawn_rh(mut read_half: tcp::OwnedReadHalf, peer_tx: Sender<Message>) -> 
                     BigEndian::read_u32(&buf[1..5]),
                     BigEndian::read_u32(&buf[5..9]),
                     buf[9..].to_vec(),
+                ),
+                msg_ids::CANCEL => Message::Cancel(
+                    BigEndian::read_u32(&buf[1..5]),
+                    BigEndian::read_u32(&buf[5..9]),
+                    BigEndian::read_u32(&buf[9..]),
                 ),
                 _ => Message::Empty,
             };
@@ -114,7 +125,7 @@ pub fn spawn_rh(mut read_half: tcp::OwnedReadHalf, peer_tx: Sender<Message>) -> 
 
 async fn recv_len(read_half: &mut tcp::OwnedReadHalf) -> io::Result<u32> {
     let mut buf = [0u8; 4];
-    let n = read_half.read_exact(&mut buf).await?;
+    let _ = read_half.read_exact(&mut buf).await?;
 
     Ok(BigEndian::read_u32(&buf))
 }
