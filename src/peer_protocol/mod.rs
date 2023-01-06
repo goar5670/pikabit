@@ -6,7 +6,10 @@ use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::{mpsc::{self, Sender}, Semaphore},
+    sync::{
+        mpsc::{self, Sender},
+        Semaphore,
+    },
     task::JoinHandle,
 };
 

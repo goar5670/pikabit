@@ -1,7 +1,7 @@
-use log::{info, trace, warn};
+use log::{info, trace};
 use std::time::Duration;
-use std::{cmp, collections::HashMap, sync::Arc};
-use tokio::sync::{mpsc, RwLockWriteGuard, Semaphore, OwnedSemaphorePermit};
+use std::{cmp, sync::Arc};
+use tokio::sync::{RwLockWriteGuard, Semaphore};
 use tokio::{sync::mpsc::Sender, task::JoinHandle};
 
 use crate::bitfield::Bitfield;
@@ -85,7 +85,8 @@ impl PeerRequestsHandler {
             tokio::time::sleep(timeout).await;
             let mut lock = pc_tracker.get_mut().await;
             if lock.is_reserved(piece_index).unwrap_or(false)
-                && !lock.has_piece(piece_index).unwrap_or(true) {
+                && !lock.has_piece(piece_index).unwrap_or(true)
+            {
                 lock.unreserve_piece(piece_index);
                 lock.update_single(piece_index);
             }

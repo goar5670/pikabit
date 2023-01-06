@@ -1,4 +1,3 @@
-use priority_queue::PriorityQueue;
 use std::collections::{HashMap, HashSet};
 
 use crate::bitfield::{Bitfield, BitfieldOwned, BitfieldRef};

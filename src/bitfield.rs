@@ -117,7 +117,7 @@ impl BitfieldOwned {
 
         let (byte_index, offset) = Self::bit_index(index);
         let byte = self.bytes.get_mut(byte_index).unwrap();
-        if ((*byte >> offset & 1) == 1) == target  {
+        if ((*byte >> offset & 1) == 1) == target {
             return self.rem();
         }
 

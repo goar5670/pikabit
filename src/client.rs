@@ -1,5 +1,5 @@
 use futures::future::join_all;
-use log::{info, trace, warn};
+use log::{info, warn};
 use serde_bencode;
 use sha1::{Digest, Sha1};
 use std::{collections::HashMap, fs, mem, sync::Arc};
@@ -11,6 +11,7 @@ use tokio::{
 use crate::{
     bitfield::*,
     conc::{SharedMut, SharedRw},
+    constants::REQUESTS_CAPACITY,
     peer_protocol::{
         self,
         fops::FileManager,
@@ -21,7 +22,6 @@ use crate::{
     },
     stats::StatsTracker,
     tracker_protocol::{metadata::Metadata, spawn_tch},
-    constants::{REQUESTS_CAPACITY, msg_ids::REQUEST},
 };
 
 pub type PeerMap = HashMap<Arc<PeerId>, SharedRw<PeerTracker>>;
@@ -235,7 +235,8 @@ impl Client {
                                 pc_tracker_clone,
                                 pr_tracker.clone(),
                                 REQUESTS_CAPACITY,
-                            ).await;
+                            )
+                            .await;
 
                             pr_map_clone.get_mut().await.insert(peer_id, pr_tracker);
 
