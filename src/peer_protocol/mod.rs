@@ -1,13 +1,12 @@
 // todo: add uTP (bep 29) | priority: low
 // todo: implement block pipelining (from bep 3) | priority: low
 
-use futures::future::join_all;
-use log::{error, trace, warn};
+use log::{error, warn};
 use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::mpsc::{self, Sender},
+    sync::{mpsc::{self, Sender}, Semaphore},
     task::JoinHandle,
 };
 
@@ -95,6 +94,7 @@ pub struct PeerTracker {
     pub state: peer::State,
     pub msg_tx: Sender<Message>,
     pub have: BitfieldOwned,
+    pub reqs_sem: Arc<Semaphore>,
 }
 
 impl PeerTracker {
@@ -103,6 +103,7 @@ impl PeerTracker {
             state: peer::State::new(),
             have,
             msg_tx,
+            reqs_sem: Arc::new(Semaphore::new(0)),
         }
     }
 }

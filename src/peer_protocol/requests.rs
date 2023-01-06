@@ -1,140 +1,125 @@
 use log::{info, trace, warn};
+use std::time::Duration;
 use std::{cmp, collections::HashMap, sync::Arc};
+use tokio::sync::{mpsc, RwLockWriteGuard, Semaphore, OwnedSemaphorePermit};
 use tokio::{sync::mpsc::Sender, task::JoinHandle};
 
 use crate::bitfield::Bitfield;
 use crate::conc::SharedRw;
 
 use super::msg::Message;
-use super::peer::PeerId;
 use super::piece::PieceTracker;
 use super::PeerTracker;
 
-pub struct RequestsTracker {
-    requested: HashMap<Arc<PeerId>, u32>,
+pub struct PeerRequestsHandler {
+    pc_tracker: SharedRw<PieceTracker>,
+    pr_tracker: SharedRw<PeerTracker>,
+    sem: Arc<Semaphore>,
     cap: u32,
 }
 
-impl RequestsTracker {
-    pub fn new(cap: Option<u32>) -> Self {
+impl PeerRequestsHandler {
+    fn new(
+        pc_tracker: SharedRw<PieceTracker>,
+        pr_tracker: SharedRw<PeerTracker>,
+        sem: Arc<Semaphore>,
+        cap: u32,
+    ) -> Self {
         Self {
-            requested: HashMap::new(),
-            cap: cap.unwrap_or(5),
+            pc_tracker,
+            pr_tracker,
+            sem,
+            cap,
         }
     }
 
-    pub fn full(&self, peer_id: &Arc<PeerId>) -> bool {
-        self.cnt(peer_id) == self.cap
+    async fn msg_tx(&self) -> Sender<Message> {
+        self.pr_tracker.get().await.msg_tx.clone()
     }
 
-    pub fn increase(&mut self, peer_id: Arc<PeerId>) {
-        if self.requested.contains_key(&peer_id) {
-            *self.requested.get_mut(&peer_id).unwrap() += 1;
-        } else {
-            self.requested.insert(peer_id.clone(), 1);
-        }
-    }
-
-    pub fn decrease(&mut self, peer_id: &Arc<PeerId>) {
-        if self.requested.contains_key(peer_id) {
-            let cnt = self.requested.get_mut(peer_id).unwrap();
-            if *cnt > 0 {
-                *cnt -= 1;
-            } else {
-                warn!("Unexpected remove when cnt is 0. peer_id: {:?}", peer_id,);
-            }
-        } else {
-            warn!(
-                "Unexpected remove when requested doesn't contain peer_id. peer_id: {:?}",
-                peer_id,
-            );
-        }
-    }
-
-    pub fn cnt(&self, peer_id: &Arc<PeerId>) -> u32 {
-        self.requested.get(peer_id).copied().unwrap_or(0)
-    }
-}
-
-pub fn spawn_reqh(
-    pc_tracker: SharedRw<PieceTracker>,
-    pr_map: SharedRw<HashMap<Arc<PeerId>, SharedRw<PeerTracker>>>,
-    req_tracker: SharedRw<RequestsTracker>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        while pc_tracker.get().await.rem() > 0 {
-            while pc_tracker.get().await.is_empty() {}
-
-            let next_piece = pc_tracker.get_mut().await.next_piece();
-            trace!("next piece to request {:?}", next_piece);
-            if let Some(piece_index) = next_piece {
-                request_piece(
-                    piece_index,
-                    req_tracker.clone(),
-                    pr_map.clone(),
-                    pc_tracker.clone(),
-                )
-                .await;
-            }
-        }
-    })
-}
-
-async fn request_piece(
-    piece_index: u32,
-    req_tracker: SharedRw<RequestsTracker>,
-    pr_map: SharedRw<HashMap<Arc<PeerId>, SharedRw<PeerTracker>>>,
-    pc_tracker: SharedRw<PieceTracker>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        for (peer_id, pr_tracker) in pr_map.get().await.iter().cycle() {
-            if !req_tracker.get().await.full(peer_id)
-                && !pr_tracker.get_mut().await.state.am_choked
-                && pr_tracker.get().await.have.get(piece_index).unwrap_or(false)
+    async fn next_piece(&self, lock: &RwLockWriteGuard<'_, PieceTracker>) -> Option<u32> {
+        for piece_index in &lock.needed {
+            if self
+                .pr_tracker
+                .get()
+                .await
+                .have
+                .get(*piece_index)
+                .unwrap_or(false)
             {
-                req_tracker.get_mut().await.increase(peer_id.clone());
-                let (piece_length, block_size) = async {
-                    let reader = pc_tracker.get().await;
-                    (
-                        reader.metadata.piece_len(piece_index),
-                        reader.metadata.block_size(),
-                    )
-                }
+                return Some(*piece_index);
+            }
+        }
+        None
+    }
+
+    async fn request_piece(&self, piece_index: u32, mut lock: RwLockWriteGuard<'_, PieceTracker>) {
+        let mut cur_offset: u32 = 0;
+        let msg_tx = self.msg_tx().await;
+        lock.reserve_piece(piece_index);
+        lock.needed.remove(&piece_index);
+        let piece_length = lock.metadata.piece_len(piece_index);
+        let block_size = lock.metadata.block_size();
+        drop(lock);
+
+        while cur_offset != piece_length {
+            let length = cmp::min(block_size, piece_length - cur_offset);
+            let _ = msg_tx
+                .send(Message::Request(piece_index, cur_offset, length))
                 .await;
-                send_piece_requests(
-                    piece_index,
-                    piece_length,
-                    block_size,
-                    &pr_tracker.get().await.msg_tx,
-                )
-                .await;
-                pc_tracker.get_mut().await.on_piece_requested(piece_index);
-                info!(
-                    "peer_id: {:?}, requested piece {}, reqt_len: {}, rem: {}",
-                    peer_id,
-                    piece_index,
-                    req_tracker.get().await.cnt(peer_id),
-                    pc_tracker.get().await.pieces_pq.len()
-                );
-                return;
+            cur_offset += length;
+        }
+    }
+
+    // hueristic about timeout to check if request was fullfilled
+    async fn request_timeout(&self) -> Duration {
+        let f = (self.cap - self.sem.available_permits() as u32) as u64;
+        Duration::from_secs(f * 10)
+    }
+
+    async fn spawn_delayed_check(&self, piece_index: u32) {
+        let pc_tracker = self.pc_tracker.clone();
+        let timeout = self.request_timeout().await;
+
+        tokio::spawn(async move {
+            tokio::time::sleep(timeout).await;
+            let mut lock = pc_tracker.get_mut().await;
+            if lock.is_reserved(piece_index).unwrap_or(false)
+                && !lock.has_piece(piece_index).unwrap_or(true) {
+                lock.unreserve_piece(piece_index);
+                lock.update_single(piece_index);
+            }
+        });
+    }
+}
+
+pub async fn spawn_reqh(
+    pc_tracker: SharedRw<PieceTracker>,
+    pr_tracker: SharedRw<PeerTracker>,
+    cap: u32,
+) -> JoinHandle<()> {
+    let reqs_sem = pr_tracker.get().await.reqs_sem.clone();
+    let handler = PeerRequestsHandler::new(pc_tracker, pr_tracker, reqs_sem, cap);
+
+    tokio::spawn(async move {
+        loop {
+            let sem = handler.sem.clone();
+            let permit = sem.acquire().await.unwrap();
+            let pc_tracker_lock = handler.pc_tracker.get_mut().await;
+            let next_piece = handler.next_piece(&pc_tracker_lock).await;
+
+            if let Some(piece_index) = next_piece {
+                permit.forget();
+                handler.request_piece(piece_index, pc_tracker_lock).await;
+                handler.spawn_delayed_check(piece_index).await;
+            } else {
+                trace!("permits before {}", sem.available_permits());
+                drop(permit);
+                drop(pc_tracker_lock);
+                trace!("permits before {}", sem.available_permits());
+                info!("no pieces to request from peer");
+                tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
     })
-}
-
-async fn send_piece_requests(
-    piece_index: u32,
-    piece_length: u32,
-    block_size: u32,
-    msg_tx: &Sender<Message>,
-) {
-    let mut cur_offset: u32 = 0;
-
-    while cur_offset != piece_length {
-        let length = cmp::min(block_size, piece_length - cur_offset);
-        let _ = msg_tx
-            .send(Message::Request(piece_index, cur_offset, length))
-            .await;
-        cur_offset += length;
-    }
 }

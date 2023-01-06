@@ -110,19 +110,23 @@ impl BitfieldOwned {
         }
     }
 
-    pub fn set(&mut self, index: u32) -> u32 {
+    pub fn set(&mut self, index: u32, target: bool) -> u32 {
         if index >= self.len() {
             panic!("Requested index {} is out of bounds {}", index, self.len());
         }
 
         let (byte_index, offset) = Self::bit_index(index);
         let byte = self.bytes.get_mut(byte_index).unwrap();
-        if *byte & (1 << offset) > 0 {
+        if ((*byte >> offset & 1) == 1) == target  {
             return self.rem();
         }
 
-        *byte |= 1 << offset;
-        self.cnt_marked += 1;
+        *byte ^= 1 << offset;
+        if target {
+            self.cnt_marked += 1;
+        } else {
+            self.cnt_marked -= 1;
+        }
 
         self.rem()
     }

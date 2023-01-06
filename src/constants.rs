@@ -16,5 +16,7 @@ pub mod timeouts {
     pub const PEER_CONNECTION: Duration = Duration::from_secs(60);
 }
 
+pub const REQUESTS_CAPACITY: u32 = 5;
+
 pub const CLIENT_PREFIX: &str = "-pB";
 pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");

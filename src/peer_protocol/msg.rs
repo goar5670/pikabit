@@ -92,8 +92,8 @@ pub fn spawn_rh(mut read_half: tcp::OwnedReadHalf, peer_tx: Sender<Message>) -> 
             } else {
                 trace!(
                     "received block: {} {}",
-                    BigEndian::read_u32(&buf[..4]),
-                    BigEndian::read_u32(&buf[4..8])
+                    BigEndian::read_u32(&buf[1..5]),
+                    BigEndian::read_u32(&buf[5..9])
                 );
             }
 

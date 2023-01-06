@@ -1,5 +1,5 @@
 use priority_queue::PriorityQueue;
-use std::{cmp::Reverse, collections::HashMap};
+use std::collections::{HashMap, HashSet};
 
 use crate::bitfield::{Bitfield, BitfieldOwned, BitfieldRef};
 
@@ -119,13 +119,13 @@ impl PieceInfo {
             offset_in_piece,
             block_size,
         ));
-        self.have.set(block_index)
+        self.have.set(block_index, true)
     }
 }
 
 pub struct PieceTracker {
     pub metadata: Metadata,
-    pub pieces_pq: PriorityQueue<u32, Reverse<u32>>,
+    pub needed: HashSet<u32>,
     have: BitfieldOwned,
     requested: BitfieldOwned,
     buffered: HashMap<u32, PieceInfo>,
@@ -138,21 +138,16 @@ impl PieceTracker {
             have: BitfieldOwned::new(metadata.num_pieces()),
             requested: BitfieldOwned::new(metadata.num_pieces()),
             metadata,
-            pieces_pq: PriorityQueue::new(),
+            needed: HashSet::new(),
             buffered: HashMap::new(),
         }
     }
 
     pub fn update_single(&mut self, piece_index: u32) {
-        if self.have.get(piece_index).unwrap() || self.requested.get(piece_index).unwrap() {
-            return;
-        }
-
-        if !self
-            .pieces_pq
-            .change_priority_by(&piece_index, |p| p.0 += 1)
+        if !self.has_piece(piece_index).unwrap_or(true)
+            && !self.is_reserved(piece_index).unwrap_or(true)
         {
-            self.pieces_pq.push(piece_index, Reverse(1));
+            self.needed.insert(piece_index);
         }
     }
 
@@ -198,8 +193,16 @@ impl PieceTracker {
         }
     }
 
-    pub fn on_piece_requested(&mut self, piece_index: u32) {
-        self.requested.set(piece_index);
+    pub fn reserve_piece(&mut self, piece_index: u32) {
+        self.requested.set(piece_index, false);
+    }
+
+    pub fn unreserve_piece(&mut self, piece_index: u32) {
+        self.requested.set(piece_index, true);
+    }
+
+    pub fn is_reserved(&self, piece_index: u32) -> Option<bool> {
+        self.requested.get(piece_index)
     }
 
     pub fn ordered_piece(&self, piece_index: u32, pbuf: &PieceBuffer) -> Vec<u8> {
@@ -234,7 +237,7 @@ impl PieceTracker {
     }
 
     pub fn on_piece_saved(&mut self, piece_index: u32) {
-        self.have.set(piece_index);
+        self.have.set(piece_index, true);
         self.buffered.remove(&piece_index);
     }
 
@@ -242,12 +245,8 @@ impl PieceTracker {
         &self.buffered.get(&piece_index).unwrap().blocks
     }
 
-    pub fn next_piece(&mut self) -> Option<u32> {
-        self.pieces_pq.pop().map(|item| item.0)
-    }
-
     pub fn is_empty(&self) -> bool {
-        self.pieces_pq.is_empty()
+        self.needed.is_empty()
     }
 
     pub fn has_piece(&self, piece_index: u32) -> Option<bool> {

@@ -17,18 +17,17 @@ use crate::{
         msg::Message,
         peer::{Peer, PeerId},
         piece::{PieceBuffer, PieceTracker},
-        requests::{self, RequestsTracker},
-        PeerTracker, RelayedMessage,
+        requests, PeerTracker, RelayedMessage,
     },
     stats::StatsTracker,
     tracker_protocol::{metadata::Metadata, spawn_tch},
+    constants::{REQUESTS_CAPACITY, msg_ids::REQUEST},
 };
 
-type PeerMap = HashMap<Arc<PeerId>, SharedRw<PeerTracker>>;
+pub type PeerMap = HashMap<Arc<PeerId>, SharedRw<PeerTracker>>;
 
 pub struct Client {
     pr_map: SharedRw<PeerMap>,
-    req_tracker: SharedRw<RequestsTracker>,
     stats_tracker: SharedMut<StatsTracker>,
     pc_tracker: SharedRw<PieceTracker>,
     peer_id: PeerId,
@@ -44,7 +43,6 @@ impl Client {
         let port = port.unwrap_or(6881);
 
         let pr_map = SharedRw::new(HashMap::new());
-        let req_tracker = SharedRw::new(RequestsTracker::new(None));
         let stats_tracker = SharedMut::new(StatsTracker::new(None, torrent.info.len()));
         let pc_tracker = SharedRw::new(PieceTracker::new(
             torrent.info.len(),
@@ -54,7 +52,6 @@ impl Client {
 
         Self {
             pr_map,
-            req_tracker,
             stats_tracker,
             pc_tracker,
             peer_id: PeerId::new(),
@@ -81,14 +78,16 @@ impl Client {
 
     async fn on_piece_completed(
         pc_tracker: &SharedRw<PieceTracker>,
+        pr_tracker: &SharedRw<PeerTracker>,
         pbuf: &PieceBuffer,
-        req_tracker: &SharedRw<RequestsTracker>,
         stats_tracker: &SharedMut<StatsTracker>,
         fman: &mut FileManager,
         piece_index: u32,
         peer_id: &Arc<PeerId>,
     ) {
+        pr_tracker.get().await.reqs_sem.add_permits(1);
         let mut lock = pc_tracker.get_mut().await;
+        lock.unreserve_piece(piece_index);
         let piece = lock.ordered_piece(piece_index, pbuf);
         let piece_hash: [u8; 20] = Sha1::digest(&piece).try_into().unwrap();
         if !lock.verify_piece_hash(piece_index, &piece_hash) {
@@ -100,7 +99,6 @@ impl Client {
             lock.on_piece_saved(piece_index);
             let rem = lock.rem();
             mem::drop(lock);
-            req_tracker.get_mut().await.decrease(&peer_id);
             info!(
                 "peer_id: {:?}, piece {} saved, rem {}",
                 peer_id, piece_index, rem,
@@ -114,7 +112,6 @@ impl Client {
 
     async fn handle_peer_com(&self, mut peer_rx: Receiver<RelayedMessage>) -> JoinHandle<()> {
         let pc_tracker = self.pc_tracker.clone();
-        let req_tracker = self.req_tracker.clone();
         let stats_tracker = self.stats_tracker.clone();
         let pr_map = self.pr_map.clone();
         let mut fman = FileManager::new(&self.torrent.info).await;
@@ -135,8 +132,8 @@ impl Client {
                     if rem == 0 {
                         Self::on_piece_completed(
                             &pc_tracker,
+                            &pr_map.get().await.get(&peer_id).unwrap(),
                             &pbuf,
-                            &req_tracker,
                             &stats_tracker,
                             &mut fman,
                             *piece_index,
@@ -152,7 +149,7 @@ impl Client {
                             if !pr_tracker.state.am_choked && pr_tracker.state.am_interested {
                                 pc_tracker.get_mut().await.update_single(piece_index);
                             }
-                            pr_tracker.have.set(piece_index);
+                            pr_tracker.have.set(piece_index, true);
                         }
                         Message::Bitfield(buf) => {
                             if !pr_tracker.state.am_choked && pr_tracker.state.am_interested {
@@ -163,7 +160,7 @@ impl Client {
                                 pc_tracker.get().await.metadata.num_pieces(),
                             )
                             .into();
-                            println!(
+                            info!(
                                 "peer {:?} has {}/{}",
                                 peer_id,
                                 pr_tracker.have.cnt_marked(),
@@ -174,6 +171,7 @@ impl Client {
                         Message::Unchoke => {
                             if pr_tracker.state.am_choked {
                                 pr_tracker.state.am_choked = false;
+                                pr_tracker.reqs_sem.add_permits(REQUESTS_CAPACITY as usize);
                                 if pr_tracker.have.cnt_marked() > 0
                                     && pr_tracker.state.am_interested
                                 {
@@ -199,8 +197,9 @@ impl Client {
     async fn handle_tracker_com(&self, peer_tx: Sender<RelayedMessage>) -> JoinHandle<()> {
         let (tracker_tx, mut tracker_rx) = mpsc::channel(40);
 
-        let num_pieces = self.pc_tracker.get().await.metadata.num_pieces();
+        let pc_tracker = self.pc_tracker.clone();
         let pr_map = self.pr_map.clone();
+        let num_pieces = pc_tracker.get().await.metadata.num_pieces();
 
         spawn_tch(
             &self.torrent,
@@ -216,30 +215,34 @@ impl Client {
             let mut pch_handles = vec![];
             while let Some(addr) = tracker_rx.recv().await {
                 let pr_map_clone = pr_map.clone();
+                let pc_tracker_clone = pc_tracker.clone();
                 let tx_clone = peer_tx.clone();
 
                 let handle = tokio::spawn(async move {
                     match peer_protocol::spawn_prch(Peer::from(addr), tx_clone, hs_payload).await {
                         Ok((peer_id, msg_tx, pch_handle)) => {
                             if pr_map_clone.get().await.contains_key(&peer_id) {
-                                return Ok(());
+                                return;
                             }
 
                             let _ = msg_tx.send(Message::Interested).await;
                             let mut pr_tracker =
                                 PeerTracker::new(BitfieldOwned::new(num_pieces), msg_tx);
                             pr_tracker.state.am_interested = true;
+                            let pr_tracker = SharedRw::new(pr_tracker);
 
-                            pr_map_clone
-                                .get_mut()
-                                .await
-                                .insert(peer_id, SharedRw::new(pr_tracker));
+                            let reqs_handle = requests::spawn_reqh(
+                                pc_tracker_clone,
+                                pr_tracker.clone(),
+                                REQUESTS_CAPACITY,
+                            ).await;
 
-                            pch_handle.await
+                            pr_map_clone.get_mut().await.insert(peer_id, pr_tracker);
+
+                            join_all(vec![pch_handle, reqs_handle]).await;
                         }
                         Err(str) => {
                             warn!("prch error {}", str);
-                            Ok(())
                         }
                     }
                 });
@@ -267,11 +270,6 @@ impl Client {
             h = self.handle_tracker_com(peer_tx.clone()).await => h,
             h = self.handle_stats() => h,
             h = self.handle_peer_com(peer_rx).await => h,
-            h = requests::spawn_reqh(
-                self.pc_tracker.clone(),
-                self.pr_map.clone(),
-                self.req_tracker.clone()
-            ) => h,
         };
     }
 }
