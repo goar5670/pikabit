@@ -2,7 +2,7 @@
 // todo: implement block pipelining (from bep 3) | priority: low
 
 use log::{error, warn};
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -36,7 +36,7 @@ pub async fn spawn_prch(
             .await
             .map_err(|e| format!("{:?}", e))?,
     );
-    peer.set_id(peer_id.clone());
+    peer.id = Some(peer_id.clone());
 
     let (read_half, write_half) = stream.into_split();
 
@@ -47,7 +47,7 @@ pub async fn spawn_prch(
 
     let join_handle = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            let _ = client_tx.send((peer.get_id().unwrap(), msg)).await;
+            let _ = client_tx.send((peer.addr, msg)).await;
         }
         tokio::select! {
             _ = sh_handle => (),
@@ -91,7 +91,7 @@ async fn handshake(payload: &[u8; 68], stream: &mut TcpStream) -> error::Result<
     Ok(PeerId::from(&peer_id))
 }
 
-pub type RelayedMessage = (Arc<PeerId>, Message);
+pub type RelayedMessage = (SocketAddr, Message);
 
 pub struct PeerTracker {
     pub state: peer::State,

@@ -10,6 +10,7 @@ use tokio::{
 };
 
 use crate::{
+    common::addr_from_buf,
     conc::{self, SharedMut},
     error::{self, Result},
 };
@@ -100,11 +101,14 @@ impl UdpTracker {
         info_hash: &Arc<[u8; 20]>,
         peer_id: &Arc<[u8; 20]>,
         port: u16,
-    ) -> Result<Vec<[u8; 6]>> {
+    ) -> Result<Vec<SocketAddr>> {
         let cid = self.connect().await?;
-        Ok(super::parse_peers(
-            &self.announce(cid, info_hash, peer_id, port).await?,
-        ))
+        Ok(
+            super::parse_peers(&self.announce(cid, info_hash, peer_id, port).await?)
+                .iter()
+                .map(|buf| addr_from_buf(buf))
+                .collect(),
+        )
     }
 }
 

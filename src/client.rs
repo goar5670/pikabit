@@ -2,7 +2,12 @@ use futures::future::join_all;
 use log::{info, warn};
 use serde_bencode;
 use sha1::{Digest, Sha1};
-use std::{collections::HashMap, fs, mem, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    net::SocketAddr,
+    sync::Arc,
+};
 use tokio::{
     sync::mpsc::{self, Receiver, Sender},
     task::JoinHandle,
@@ -24,7 +29,7 @@ use crate::{
     tracker_protocol::{metadata::Metadata, spawn_tch},
 };
 
-pub type PeerMap = HashMap<Arc<PeerId>, SharedRw<PeerTracker>>;
+pub type PeerMap = HashMap<SocketAddr, SharedRw<PeerTracker>>;
 
 pub struct Client {
     pr_map: SharedRw<PeerMap>,
@@ -78,18 +83,17 @@ impl Client {
 
     async fn on_piece_completed(
         pc_tracker: &SharedRw<PieceTracker>,
-        pr_tracker: &SharedRw<PeerTracker>,
         pbuf: &PieceBuffer,
         stats_tracker: &SharedMut<StatsTracker>,
         fman: &mut FileManager,
         piece_index: u32,
-        peer_id: &Arc<PeerId>,
     ) {
-        pr_tracker.get().await.reqs_sem.add_permits(1);
         let mut lock = pc_tracker.get_mut().await;
         lock.unreserve_piece(piece_index);
+
         let piece = lock.ordered_piece(piece_index, pbuf);
         let piece_hash: [u8; 20] = Sha1::digest(&piece).try_into().unwrap();
+
         if !lock.verify_piece_hash(piece_index, &piece_hash) {
             warn!("hash verification failed for piece {piece_index}");
             lock.update_single(piece_index);
@@ -97,16 +101,10 @@ impl Client {
             fman.write_piece(lock.metadata.piece_offset(piece_index), &piece)
                 .await;
             lock.on_piece_saved(piece_index);
-            let rem = lock.rem();
-            mem::drop(lock);
-            info!(
-                "peer_id: {:?}, piece {} saved, rem {}",
-                peer_id, piece_index, rem,
-            );
             stats_tracker
                 .lock()
                 .await
-                .update(pc_tracker.get().await.metadata.piece_len(piece_index));
+                .update(lock.metadata.piece_len(piece_index));
         }
     }
 
@@ -118,7 +116,7 @@ impl Client {
 
         tokio::spawn(async move {
             let mut pbuf = PieceBuffer::new();
-            while let Some((peer_id, msg)) = peer_rx.recv().await {
+            while let Some((peer_addr, msg)) = peer_rx.recv().await {
                 if let Message::Piece(piece_index, offset_in_piece, buf) = &msg
                     && !pc_tracker.get().await.has_piece(*piece_index).unwrap_or(true) {
                     let offset_in_buffer = pbuf.append(*piece_index, buf);
@@ -130,20 +128,23 @@ impl Client {
                     );
 
                     if rem == 0 {
+                        pr_map.get().await.get(&peer_addr).unwrap().get().await.reqs_sem.add_permits(1);
                         Self::on_piece_completed(
                             &pc_tracker,
-                            &pr_map.get().await.get(&peer_id).unwrap(),
                             &pbuf,
                             &stats_tracker,
                             &mut fman,
                             *piece_index,
-                            &peer_id,
                         )
                         .await;
+                        info!(
+                            "peer_addr: {:?}, piece {} saved, rem {}",
+                            peer_addr, piece_index, rem,
+                        );
                     }
                 } else {
                     let mut writer = pr_map.get_mut().await;
-                    let mut pr_tracker = writer.get_mut(&peer_id).unwrap().get_mut().await;
+                    let mut pr_tracker = writer.get_mut(&peer_addr).unwrap().get_mut().await;
                     match msg {
                         Message::Have(piece_index) => {
                             if !pr_tracker.state.am_choked && pr_tracker.state.am_interested {
@@ -162,7 +163,7 @@ impl Client {
                             .into();
                             info!(
                                 "peer {:?} has {}/{}",
-                                peer_id,
+                                peer_addr,
                                 pr_tracker.have.cnt_marked(),
                                 pc_tracker.get().await.metadata.num_pieces()
                             );
@@ -199,6 +200,7 @@ impl Client {
 
         let pc_tracker = self.pc_tracker.clone();
         let pr_map = self.pr_map.clone();
+        let peers = SharedMut::new(HashSet::<Arc<PeerId>>::new());
         let num_pieces = pc_tracker.get().await.metadata.num_pieces();
 
         spawn_tch(
@@ -217,11 +219,12 @@ impl Client {
                 let pr_map_clone = pr_map.clone();
                 let pc_tracker_clone = pc_tracker.clone();
                 let tx_clone = peer_tx.clone();
+                let peers_clone = peers.clone();
 
                 let handle = tokio::spawn(async move {
                     match peer_protocol::spawn_prch(Peer::from(addr), tx_clone, hs_payload).await {
                         Ok((peer_id, msg_tx, pch_handle)) => {
-                            if pr_map_clone.get().await.contains_key(&peer_id) {
+                            if peers_clone.lock().await.contains(&peer_id) {
                                 return;
                             }
 
@@ -238,7 +241,8 @@ impl Client {
                             )
                             .await;
 
-                            pr_map_clone.get_mut().await.insert(peer_id, pr_tracker);
+                            peers_clone.lock().await.insert(peer_id);
+                            pr_map_clone.get_mut().await.insert(addr, pr_tracker);
 
                             join_all(vec![pch_handle, reqs_handle]).await;
                         }

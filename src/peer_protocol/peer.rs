@@ -1,12 +1,5 @@
-use byteorder::{BigEndian, ByteOrder};
-
 use rand::{distributions::Alphanumeric, Rng};
-use std::{
-    cmp,
-    fmt::Debug,
-    net::{Ipv4Addr, SocketAddr},
-    sync::Arc,
-};
+use std::{cmp, fmt::Debug, net::SocketAddr, sync::Arc};
 use tokio::{net::TcpStream, time::timeout};
 
 use crate::common;
@@ -62,13 +55,13 @@ impl Debug for PeerId {
 
 #[derive(Debug, PartialEq)]
 pub struct Peer {
-    address: SocketAddr,
-    id: Option<Arc<PeerId>>,
+    pub addr: SocketAddr,
+    pub id: Option<Arc<PeerId>>,
 }
 
 impl Peer {
     pub async fn connect(&self) -> Result<TcpStream, String> {
-        match timeout(timeouts::PEER_CONNECTION, TcpStream::connect(&self.address)).await {
+        match timeout(timeouts::PEER_CONNECTION, TcpStream::connect(&self.addr)).await {
             Ok(r) => r.map_err(|e| format!("{e:?}")),
             Err(_) => Err(format!(
                 "connection timed out, {:?}",
@@ -76,25 +69,11 @@ impl Peer {
             )),
         }
     }
-
-    pub fn set_id(&mut self, id: Arc<PeerId>) {
-        self.id = Some(id);
-    }
-
-    pub fn get_id(&self) -> Option<Arc<PeerId>> {
-        self.id.as_ref().cloned()
-    }
 }
 
-impl From<[u8; 6]> for Peer {
-    fn from(buf: [u8; 6]) -> Self {
-        Self {
-            address: SocketAddr::from((
-                Ipv4Addr::from(BigEndian::read_u32(&buf)),
-                BigEndian::read_u16(&buf[4..]),
-            )),
-            id: None,
-        }
+impl From<SocketAddr> for Peer {
+    fn from(addr: SocketAddr) -> Self {
+        Self { addr, id: None }
     }
 }
 
@@ -119,16 +98,18 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::addr_from_buf;
+    use std::net::Ipv4Addr;
 
     #[test]
     fn peer_from_slice() {
         let slice: [u8; 6] = [10, 123, 0, 47, 26, 225];
-        let peer = Peer::from(slice);
+        let peer = Peer::from(addr_from_buf(&slice));
 
         assert_eq!(
             peer,
             Peer {
-                address: SocketAddr::from((Ipv4Addr::new(10, 123, 0, 47), 6881)),
+                addr: SocketAddr::from((Ipv4Addr::new(10, 123, 0, 47), 6881)),
                 id: None,
             }
         );

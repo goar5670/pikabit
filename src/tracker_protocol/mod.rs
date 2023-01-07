@@ -47,7 +47,7 @@ impl Tracker {
         info_hash: Arc<[u8; 20]>,
         peer_id: Arc<[u8; 20]>,
         port: u16,
-    ) -> Result<Vec<[u8; 6]>> {
+    ) -> Result<Vec<SocketAddr>> {
         let peers_res = match self {
             Self::Udp(u) => u.get_peers(&info_hash, &peer_id, port).await,
             Self::Http(h) => h.get_peers(&info_hash, &peer_id, port).await,
@@ -106,12 +106,12 @@ pub async fn spawn_tch(
     metadata: &metadata::Metadata,
     peer_id: Arc<[u8; 20]>,
     port: u16,
-    client_tx: Sender<[u8; 6]>,
+    client_tx: Sender<SocketAddr>,
 ) -> JoinHandle<()> {
     let info_hash = Arc::new(metadata.info.hash());
     let socket = SharedMut::new(UdpSocket::bind(format!("0.0.0.0:{port}")).await.unwrap());
 
-    let peers_map: SharedMut<HashSet<[u8; 6]>> = SharedMut::new(HashSet::new());
+    let peers_map: SharedMut<HashSet<SocketAddr>> = SharedMut::new(HashSet::new());
 
     let announce_list = full_announce_list(metadata);
 

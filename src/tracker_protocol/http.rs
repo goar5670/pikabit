@@ -4,10 +4,10 @@ use serde_bencode;
 use serde_bytes::ByteBuf;
 use serde_derive::*;
 use serde_qs as qs;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use urlencoding;
 
-use crate::error::Result;
+use crate::{common::addr_from_buf, error::Result};
 
 #[derive(Debug, Serialize)]
 pub enum Event {
@@ -112,9 +112,12 @@ impl HttpTracker {
         info_hash: &[u8; 20],
         peer_id: &[u8; 20],
         port: u16,
-    ) -> Result<Vec<[u8; 6]>> {
-        Ok(super::parse_peers(
-            &self.announce(info_hash, peer_id, port).await?,
-        ))
+    ) -> Result<Vec<SocketAddr>> {
+        Ok(
+            super::parse_peers(&self.announce(info_hash, peer_id, port).await?)
+                .iter()
+                .map(|buf| addr_from_buf(buf))
+                .collect(),
+        )
     }
 }
