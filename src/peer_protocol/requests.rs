@@ -1,4 +1,4 @@
-use log::{info, trace};
+use log::{debug, error, info, trace, warn};
 use std::time::Duration;
 use std::{cmp, sync::Arc};
 use tokio::sync::{RwLockWriteGuard, Semaphore};
@@ -89,6 +89,7 @@ impl PeerRequestsHandler {
             {
                 lock.unreserve_piece(piece_index);
                 lock.update_single(piece_index);
+                warn!("delayed check on piece {} yielded false", piece_index);
             }
         });
     }
@@ -105,12 +106,23 @@ pub async fn spawn_reqh(
     tokio::spawn(async move {
         loop {
             let sem = handler.sem.clone();
-            let permit = sem.acquire().await.unwrap();
+            let permit = match sem.acquire().await {
+                Ok(p) => p,
+                Err(e) => {
+                    error!("permit acquire error {:?}", e);
+                    break;
+                }
+            };
             let pc_tracker_lock = handler.pc_tracker.get_mut().await;
             let next_piece = handler.next_piece(&pc_tracker_lock).await;
 
             if let Some(piece_index) = next_piece {
                 permit.forget();
+                debug!(
+                    "requesting piece {} from {:?}",
+                    piece_index,
+                    handler.pr_tracker.get().await.id
+                );
                 handler.request_piece(piece_index, pc_tracker_lock).await;
                 handler.spawn_delayed_check(piece_index).await;
             } else {
@@ -122,5 +134,6 @@ pub async fn spawn_reqh(
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
+        info!("exiting reqh task");
     })
 }

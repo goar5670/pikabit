@@ -1,5 +1,5 @@
 use futures::future::join_all;
-use log::trace;
+use log::{info, trace};
 use regex::Regex;
 use std::{
     collections::{HashMap, HashSet},
@@ -34,7 +34,7 @@ enum Tracker {
 }
 
 impl Tracker {
-    fn new_udp(addr: SocketAddr, socket: &SharedMut<UdpSocket>, rx: Receiver<Vec<u8>>) -> Self {
+    fn new_udp(addr: SocketAddr, socket: SharedMut<UdpSocket>, rx: Receiver<Vec<u8>>) -> Self {
         Self::Udp(UdpTracker::new(addr, socket, rx))
     }
 
@@ -128,7 +128,7 @@ pub async fn spawn_tch(
                         .map(|addr| {
                             let (tx, rx) = mpsc::channel(40);
                             tracker_map.insert(addr, tx);
-                            Tracker::new_udp(addr, &socket, rx)
+                            Tracker::new_udp(addr, socket.clone(), rx)
                         })
                         .collect();
                     return Some(v);
@@ -141,15 +141,21 @@ pub async fn spawn_tch(
         .flatten()
         .collect();
 
-    spawn_udp_rh(tracker_map, socket.clone());
+    let udp_rh_handle = spawn_udp_rh(tracker_map, socket.clone());
 
     tokio::spawn(async move {
-        let mut handles = vec![];
+        let mut udp_handles = vec![];
+        let mut http_handles = vec![];
+
         trackers_list.into_iter().for_each(|mut tracker| {
             let client_tx_clone = client_tx.clone();
             let info_hash_clone = info_hash.clone();
             let peer_id_clone = peer_id.clone();
             let pm_clone = peers_map.clone();
+            let tracker_type = match tracker {
+                Tracker::Udp(_) => Protocol::UDP,
+                Tracker::Http(_) => Protocol::HTTP,
+            };
 
             let handle = tokio::spawn(async move {
                 let peers = tracker
@@ -157,17 +163,35 @@ pub async fn spawn_tch(
                     .await
                     .unwrap_or(vec![]);
 
+                let peers_len = peers.len();
+
                 for addr in peers {
-                    if !pm_clone.lock().await.contains(&addr) {
+                    let mut lock = pm_clone.lock().await;
+                    if !lock.contains(&addr) {
                         trace!("new peer {:?} from {}", addr, tracker.to_string());
-                        pm_clone.lock().await.insert(addr);
+                        lock.insert(addr);
                         let _ = client_tx_clone.send(addr).await;
                     }
                 }
+                info!(
+                    "processed {} peers from tracker {}, exiting task",
+                    peers_len,
+                    tracker.to_string()
+                );
             });
-            handles.push(handle);
+
+            match tracker_type {
+                Protocol::HTTP => http_handles.push(handle),
+                Protocol::UDP => udp_handles.push(handle),
+            };
         });
 
-        join_all(handles).await;
+        join_all(http_handles).await;
+        tokio::select! {
+            _ = join_all(udp_handles) => {},
+            _ = udp_rh_handle => {},
+        };
+
+        info!("exiting tch task");
     })
 }

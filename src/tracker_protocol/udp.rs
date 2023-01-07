@@ -1,4 +1,5 @@
 use byteorder::{BigEndian, ByteOrder};
+use log::{error, info};
 use rand::Rng;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::{
@@ -28,12 +29,8 @@ pub struct UdpTracker {
 }
 
 impl UdpTracker {
-    pub fn new(addr: SocketAddr, socket: &SharedMut<UdpSocket>, rx: Receiver<Vec<u8>>) -> Self {
-        Self {
-            addr,
-            socket: socket.clone(),
-            rx,
-        }
+    pub fn new(addr: SocketAddr, socket: SharedMut<UdpSocket>, rx: Receiver<Vec<u8>>) -> Self {
+        Self { addr, socket, rx }
     }
 
     async fn send_recv(&mut self, buf: &[u8]) -> Result<Vec<u8>> {
@@ -120,16 +117,21 @@ pub fn spawn_udp_rh(
         let mut buf = [0u8; 512];
         loop {
             let res = socket.lock().await.try_recv_from(&mut buf);
-            if res
-                .as_ref()
-                .is_err_and(|e| e.kind() == std::io::ErrorKind::WouldBlock)
-            {
-                time::sleep(Duration::from_millis(100)).await;
-                continue;
-            }
-            if let Ok((n, addr)) = res && let Some(tx) = tracker_map.get(&addr) {
-                let _ = tx.send(buf[..n].to_vec()).await;
+            match res {
+                Ok((n, addr)) => {
+                    if let Some(tx) = tracker_map.get(&addr) {
+                        let _ = tx.send(buf[..n].to_vec()).await;
+                    }
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    time::sleep(Duration::from_millis(100)).await
+                }
+                Err(e) => {
+                    error!("udp_rh error {:?}", e);
+                    break;
+                }
             }
         }
+        info!("exiting udp_rh task");
     })
 }

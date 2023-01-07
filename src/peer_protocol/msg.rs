@@ -1,5 +1,6 @@
-use std::io::{self, ErrorKind};
-
+use byteorder::{BigEndian, ByteOrder};
+use log::{info, trace, warn};
+use std::{io, net::SocketAddr};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::tcp,
@@ -8,10 +9,10 @@ use tokio::{
     time::{self, Duration},
 };
 
-use byteorder::{BigEndian, ByteOrder};
-use log::{error, info, trace, warn};
-
 use crate::constants::msg_ids;
+use crate::error::Result;
+
+pub type RelayedMessage = (SocketAddr, Message);
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum Message {
@@ -60,30 +61,26 @@ impl Message {
     }
 }
 
-pub fn spawn_rh(mut read_half: tcp::OwnedReadHalf, peer_tx: Sender<Message>) -> JoinHandle<()> {
+pub fn spawn_rh(
+    mut read_half: tcp::OwnedReadHalf,
+    client_tx: Sender<RelayedMessage>,
+    addr: SocketAddr,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            let res = recv_len(&mut read_half).await;
-
-            if res
-                .as_ref()
-                .is_err_and(|e| e.kind() == ErrorKind::UnexpectedEof)
-            {
-                break;
-            } else if res.is_err() {
-                warn!("{:?}", res);
-                continue;
-            }
-
-            let n = res.unwrap();
-
-            if n == 0 {
-                continue;
-            }
+            let n = match recv_len(&mut read_half).await {
+                Err(e) => {
+                    warn!("recv_len error {:?}", e);
+                    break;
+                }
+                Ok(0) => continue,
+                Ok(n) => n,
+            };
 
             let mut buf: Vec<u8> = vec![0; n as usize];
-            if !recv(&mut read_half, &mut buf).await {
-                return;
+            if let Err(e) = recv(&mut read_half, &mut buf).await {
+                warn!("recv (len: {}) error {:?}", n, e);
+                break;
             }
 
             let msg_id = buf[0];
@@ -117,9 +114,10 @@ pub fn spawn_rh(mut read_half: tcp::OwnedReadHalf, peer_tx: Sender<Message>) -> 
             };
 
             if msg != Message::Empty {
-                let _ = peer_tx.send(msg).await;
+                let _ = client_tx.send((addr, msg)).await;
             }
         }
+        info!("exiting rh task of peer {:?}", addr);
     })
 }
 
@@ -130,18 +128,19 @@ async fn recv_len(read_half: &mut tcp::OwnedReadHalf) -> io::Result<u32> {
     Ok(BigEndian::read_u32(&buf))
 }
 
-async fn recv(read_half: &mut tcp::OwnedReadHalf, buf: &mut [u8]) -> bool {
-    let n = read_half.read_exact(buf).await.unwrap_or(0);
-    if n != buf.len() {
-        error!(
-            "Unexpected behaviour, read {} bytes expected {}",
+async fn recv(read_half: &mut tcp::OwnedReadHalf, buf: &mut [u8]) -> Result<usize> {
+    let res = read_half.read_exact(buf).await;
+
+    match res {
+        Err(e) => Err(e.into()),
+        Ok(n) if n != buf.len() => Err(format!(
+            "Unexpected length, read {} bytes, expected {}",
             n,
             buf.len()
-        );
-        error!("{:?}", &buf);
+        )
+        .into()),
+        Ok(n) => Ok(n),
     }
-
-    n == buf.len()
 }
 
 pub fn spawn_sh(mut write_half: tcp::OwnedWriteHalf) -> (Sender<Message>, JoinHandle<()>) {
@@ -150,10 +149,11 @@ pub fn spawn_sh(mut write_half: tcp::OwnedWriteHalf) -> (Sender<Message>, JoinHa
         loop {
             match time::timeout(Duration::from_secs(2 * 60), rx.recv()).await {
                 Ok(Some(msg)) => msg.send(&mut write_half).await,
-                Ok(None) => return,
+                Ok(None) => break,
                 Err(_) => Message::KeepAlive.send(&mut write_half).await,
             }
         }
+        info!("exiting sh task");
     });
 
     (tx, join_handle)

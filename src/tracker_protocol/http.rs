@@ -1,4 +1,3 @@
-use log::info;
 use reqwest;
 use serde_bencode;
 use serde_bytes::ByteBuf;
@@ -97,8 +96,6 @@ impl HttpTracker {
             enc_peer_id,
             qs::to_string(&request).unwrap(),
         );
-
-        info!("{}", request_url);
 
         let res = reqwest::get(request_url).await?.bytes().await?;
 

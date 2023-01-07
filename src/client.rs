@@ -18,12 +18,11 @@ use crate::{
     conc::{SharedMut, SharedRw},
     constants::REQUESTS_CAPACITY,
     peer_protocol::{
-        self,
         fops::FileManager,
-        msg::Message,
+        msg::{Message, RelayedMessage},
         peer::{Peer, PeerId},
         piece::{PieceBuffer, PieceTracker},
-        requests, PeerTracker, RelayedMessage,
+        requests, spawn_prch, PeerTracker,
     },
     stats::StatsTracker,
     tracker_protocol::{metadata::Metadata, spawn_tch},
@@ -139,7 +138,7 @@ impl Client {
                         .await;
                         info!(
                             "peer_addr: {:?}, piece {} saved, rem {}",
-                            peer_addr, piece_index, rem,
+                            peer_addr, piece_index, pc_tracker.get().await.rem(),
                         );
                     }
                 } else {
@@ -192,6 +191,7 @@ impl Client {
                     }
                 }
             }
+            info!("exiting peer_com task");
         })
     }
 
@@ -222,39 +222,49 @@ impl Client {
                 let peers_clone = peers.clone();
 
                 let handle = tokio::spawn(async move {
-                    match peer_protocol::spawn_prch(Peer::from(addr), tx_clone, hs_payload).await {
-                        Ok((peer_id, msg_tx, pch_handle)) => {
-                            if peers_clone.lock().await.contains(&peer_id) {
+                    let (peer_id, msg_tx, pch_handle) =
+                        match spawn_prch(Peer::from(addr), tx_clone, hs_payload).await {
+                            Ok(o) => o,
+                            Err(e) => {
+                                warn!("prch returned with error {}, exiting peer task", e);
                                 return;
                             }
+                        };
 
-                            let _ = msg_tx.send(Message::Interested).await;
-                            let mut pr_tracker =
-                                PeerTracker::new(BitfieldOwned::new(num_pieces), msg_tx);
-                            pr_tracker.state.am_interested = true;
-                            let pr_tracker = SharedRw::new(pr_tracker);
-
-                            let reqs_handle = requests::spawn_reqh(
-                                pc_tracker_clone,
-                                pr_tracker.clone(),
-                                REQUESTS_CAPACITY,
-                            )
-                            .await;
-
-                            peers_clone.lock().await.insert(peer_id);
-                            pr_map_clone.get_mut().await.insert(addr, pr_tracker);
-
-                            join_all(vec![pch_handle, reqs_handle]).await;
-                        }
-                        Err(str) => {
-                            warn!("prch error {}", str);
-                        }
+                    let mut peers_lock = peers_clone.lock().await;
+                    if peers_lock.contains(&peer_id) {
+                        return;
                     }
+
+                    peers_lock.insert(peer_id.clone());
+
+                    drop(peers_lock);
+
+                    let _ = msg_tx.send(Message::Interested).await;
+                    let mut pr_tracker =
+                        PeerTracker::new(peer_id, BitfieldOwned::new(num_pieces), msg_tx);
+                    pr_tracker.state.am_interested = true;
+                    let pr_tracker = SharedRw::new(pr_tracker);
+
+                    pr_map_clone
+                        .get_mut()
+                        .await
+                        .insert(addr, pr_tracker.clone());
+
+                    let reqs_handle =
+                        requests::spawn_reqh(pc_tracker_clone, pr_tracker, REQUESTS_CAPACITY).await;
+
+                    let r = tokio::select! {
+                        p = pch_handle => p,
+                        r = reqs_handle => r,
+                    };
+                    info!("existing peer task with {:?}", r);
                 });
                 pch_handles.push(handle);
             }
 
             join_all(pch_handles).await;
+            info!("exiting tracker_com task");
         })
     }
 
@@ -272,9 +282,9 @@ impl Client {
         let (peer_tx, peer_rx) = mpsc::channel(40);
 
         let _ = tokio::select! {
-            h = self.handle_tracker_com(peer_tx.clone()).await => h,
-            h = self.handle_stats() => h,
+            h = self.handle_tracker_com(peer_tx).await => h,
             h = self.handle_peer_com(peer_rx).await => h,
+            h = self.handle_stats() => h,
         };
     }
 }

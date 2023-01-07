@@ -1,22 +1,19 @@
 // todo: add uTP (bep 29) | priority: low
 // todo: implement block pipelining (from bep 3) | priority: low
 
-use log::{error, warn};
-use std::{net::SocketAddr, sync::Arc};
+use log::{error, info, warn};
+use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::{
-        mpsc::{self, Sender},
-        Semaphore,
-    },
+    sync::{mpsc::Sender, Semaphore},
     task::JoinHandle,
 };
 
 use crate::{bitfield::*, error};
 use peer::{Peer, PeerId};
 
-use msg::Message;
+use msg::{Message, RelayedMessage};
 
 pub mod fops;
 pub mod msg;
@@ -40,19 +37,15 @@ pub async fn spawn_prch(
 
     let (read_half, write_half) = stream.into_split();
 
-    let (tx, mut rx) = mpsc::channel(40);
-
     let (msg_tx, sh_handle) = msg::spawn_sh(write_half);
-    let rh_handle = msg::spawn_rh(read_half, tx);
+    let rh_handle = msg::spawn_rh(read_half, client_tx, peer.addr);
 
-    let join_handle = tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            let _ = client_tx.send((peer.addr, msg)).await;
-        }
-        tokio::select! {
-            _ = sh_handle => (),
-            _ = rh_handle => (),
-        }
+    let join_handle = tokio::spawn(async {
+        let res = tokio::select! {
+            s = sh_handle => s,
+            r = rh_handle => r,
+        };
+        info!("existed peer connection task with {:?}", res);
     });
 
     Ok((peer_id, msg_tx, join_handle))
@@ -91,9 +84,8 @@ async fn handshake(payload: &[u8; 68], stream: &mut TcpStream) -> error::Result<
     Ok(PeerId::from(&peer_id))
 }
 
-pub type RelayedMessage = (SocketAddr, Message);
-
 pub struct PeerTracker {
+    pub id: Arc<PeerId>,
     pub state: peer::State,
     pub msg_tx: Sender<Message>,
     pub have: BitfieldOwned,
@@ -101,8 +93,9 @@ pub struct PeerTracker {
 }
 
 impl PeerTracker {
-    pub fn new(have: BitfieldOwned, msg_tx: Sender<Message>) -> Self {
+    pub fn new(peer_id: Arc<PeerId>, have: BitfieldOwned, msg_tx: Sender<Message>) -> Self {
         Self {
+            id: peer_id,
             state: peer::State::new(),
             have,
             msg_tx,
