@@ -38,7 +38,7 @@ pub async fn spawn_prch(
     let (read_half, write_half) = stream.into_split();
 
     let (msg_tx, sh_handle) = msg::spawn_sh(write_half);
-    let rh_handle = msg::spawn_rh(read_half, client_tx, peer.addr);
+    let rh_handle = msg::spawn_rh(read_half, client_tx, peer);
 
     let join_handle = tokio::spawn(async {
         let res = tokio::select! {

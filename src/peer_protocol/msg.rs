@@ -11,6 +11,7 @@ use tokio::{
 
 use crate::constants::msg_ids;
 use crate::error::Result;
+use crate::peer_protocol::peer::Peer;
 
 pub type RelayedMessage = (SocketAddr, Message);
 
@@ -64,7 +65,7 @@ impl Message {
 pub fn spawn_rh(
     mut read_half: tcp::OwnedReadHalf,
     client_tx: Sender<RelayedMessage>,
-    addr: SocketAddr,
+    peer: Peer,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -85,12 +86,13 @@ pub fn spawn_rh(
 
             let msg_id = buf[0];
             if msg_id != msg_ids::PIECE {
-                info!("received msg id: {}, {:?}", msg_id, &buf);
+                info!("received msg id: {}, {:?} from {:?}", msg_id, &buf, peer.id);
             } else {
                 trace!(
-                    "received block: {} {}",
+                    "received block: {} {}, from {:?}",
                     BigEndian::read_u32(&buf[1..5]),
-                    BigEndian::read_u32(&buf[5..9])
+                    BigEndian::read_u32(&buf[5..9]),
+                    peer.id,
                 );
             }
 
@@ -114,10 +116,10 @@ pub fn spawn_rh(
             };
 
             if msg != Message::Empty {
-                let _ = client_tx.send((addr, msg)).await;
+                let _ = client_tx.send((peer.addr, msg)).await;
             }
         }
-        info!("exiting rh task of peer {:?}", addr);
+        info!("exiting rh task of peer {:?}", peer.id);
     })
 }
 
