@@ -1,5 +1,6 @@
 use clap::Parser;
 use pikabit::client::Client;
+use std::fs::File;
 
 #[derive(Parser)]
 struct Args {
@@ -11,6 +12,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    File::create("log/.log").unwrap();
     log4rs::init_file("log_config.yml", Default::default()).unwrap();
 
     let args = Args::parse();
