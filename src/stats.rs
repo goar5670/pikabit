@@ -68,7 +68,7 @@ impl StatsTracker {
                 "[".to_owned()
                     + &"=".repeat(p)
                     + ">"
-                    + &" ".repeat(SCALE - p - 1)
+                    + &"-".repeat(SCALE - p - 1)
                     + "] "
                     + &progress.to_string()
                     + "%"
@@ -97,7 +97,7 @@ impl StatsTracker {
             self.downloaded,
             self.total
         );
-        let progress = ((self.downloaded as f64 / self.total as f64) * 100.0).round() as u8;
+        let progress = ((self.downloaded as f64 / self.total as f64) * 100.0).floor() as u8;
 
         print!("\r{} {}", Self::format_progress(progress), speed.format());
         stdout.flush().unwrap();
