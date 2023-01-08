@@ -193,11 +193,11 @@ impl PieceTracker {
     }
 
     pub fn reserve_piece(&mut self, piece_index: u32) {
-        self.requested.set(piece_index, false);
+        self.requested.set(piece_index, true);
     }
 
     pub fn unreserve_piece(&mut self, piece_index: u32) {
-        self.requested.set(piece_index, true);
+        self.requested.set(piece_index, false);
     }
 
     pub fn is_reserved(&self, piece_index: u32) -> Option<bool> {
