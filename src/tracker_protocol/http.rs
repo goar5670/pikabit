@@ -1,3 +1,4 @@
+use anyhow;
 use reqwest;
 use serde_bencode;
 use serde_bytes::ByteBuf;
@@ -6,7 +7,7 @@ use serde_qs as qs;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use urlencoding;
 
-use crate::{common::addr_from_buf, error::Result};
+use crate::common::addr_from_buf;
 
 #[derive(Debug, Serialize)]
 pub enum Event {
@@ -71,7 +72,7 @@ impl HttpTracker {
         info_hash: &[u8; 20],
         peer_id: &[u8; 20],
         port: u16,
-    ) -> Result<Vec<u8>> {
+    ) -> anyhow::Result<Vec<u8>> {
         let request = Request {
             port,
             downloaded: 0,
@@ -109,7 +110,7 @@ impl HttpTracker {
         info_hash: &[u8; 20],
         peer_id: &[u8; 20],
         port: u16,
-    ) -> Result<Vec<SocketAddr>> {
+    ) -> anyhow::Result<Vec<SocketAddr>> {
         Ok(
             super::parse_peers(&self.announce(info_hash, peer_id, port).await?)
                 .iter()

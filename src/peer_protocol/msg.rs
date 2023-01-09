@@ -1,17 +1,17 @@
+use anyhow;
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
-use log::{info, warn, error};
+use log::{error, info, warn};
 use std::net::SocketAddr;
 use tokio::{
-    net::tcp,
     io::{AsyncReadExt, AsyncWriteExt},
+    net::tcp,
     sync::mpsc::{self, Receiver, Sender},
     task::JoinHandle,
     time::{self, Duration},
 };
 
-use crate::{constants::msg, error::expect_eq};
-use crate::error::Result;
 use crate::peer_protocol::peer::Peer;
+use crate::{constants::msg, error::expect_eq};
 
 pub type RelayedMessage = (SocketAddr, Message);
 
@@ -30,7 +30,7 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn serialize(self) -> Result<Vec<u8>> {
+    pub fn serialize(self) -> anyhow::Result<Vec<u8>> {
         let (length, msg_id, payload) = match self {
             Message::Request(index, begin, length) => {
                 let mut buf: Vec<u8> = vec![];
@@ -57,7 +57,7 @@ impl Message {
         Ok(buf)
     }
 
-    pub fn deserialize(buf: &[u8]) -> Result<Self> {
+    pub fn deserialize(buf: &[u8]) -> anyhow::Result<Self> {
         let msg_id = buf[4];
 
         let msg = match msg_id {
@@ -77,12 +77,12 @@ impl Message {
             ),
             _ => Self::KeepAlive,
         };
-        
+
         Ok(msg)
     }
 }
 
-pub async fn recv_msg(read_half: &mut tcp::OwnedReadHalf) -> Result<Vec<u8>> {
+pub async fn recv_msg(read_half: &mut tcp::OwnedReadHalf) -> anyhow::Result<Vec<u8>> {
     let mut buf: Vec<u8> = vec![0; 4];
 
     let n = read_half.read_exact(&mut buf).await?;
@@ -93,7 +93,7 @@ pub async fn recv_msg(read_half: &mut tcp::OwnedReadHalf) -> Result<Vec<u8>> {
     if length == 0 {
         return Ok(buf);
     }
-    
+
     buf.resize(4 + length, 0);
 
     let n = read_half.read_exact(&mut buf[4..]).await?;
@@ -114,7 +114,7 @@ pub fn spawn_rh(
                 Err(e) => {
                     warn!("recv_msg error {:?}", e);
                     break;
-                },
+                }
             };
 
             let msg = match Message::deserialize(&buf) {
@@ -122,7 +122,7 @@ pub fn spawn_rh(
                 Err(e) => {
                     error!("message deserialize error {:?}", e);
                     break;
-                },
+                }
             };
 
             if msg != Message::KeepAlive {
@@ -148,7 +148,7 @@ pub fn spawn_sh(mut write_half: tcp::OwnedWriteHalf) -> (Sender<Message>, JoinHa
                 Err(e) => {
                     error!("error serializing message: {:?}", e);
                     continue;
-                },
+                }
             };
             // todo: handle errors on write
             let _ = write_half.write(&buf).await;

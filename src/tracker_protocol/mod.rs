@@ -15,7 +15,7 @@ use tokio::{
 };
 
 use self::udp::{spawn_udp_rh, UdpTracker};
-use crate::{conc::SharedMut, error::Result};
+use crate::conc::SharedMut;
 
 pub mod http;
 pub mod metadata;
@@ -47,7 +47,7 @@ impl Tracker {
         info_hash: Arc<[u8; 20]>,
         peer_id: Arc<[u8; 20]>,
         port: u16,
-    ) -> Result<Vec<SocketAddr>> {
+    ) -> anyhow::Result<Vec<SocketAddr>> {
         let peers_res = match self {
             Self::Udp(u) => u.get_peers(&info_hash, &peer_id, port).await,
             Self::Http(h) => h.get_peers(&info_hash, &peer_id, port).await,
@@ -76,7 +76,7 @@ fn parse_peers(buf: &[u8]) -> Vec<[u8; 6]> {
         .collect()
 }
 
-fn parse_tracker_url(url: &str) -> Result<(Protocol, String)> {
+fn parse_tracker_url(url: &str) -> anyhow::Result<(Protocol, String)> {
     if url.starts_with("udp://") {
         let re = Regex::new(r"//(.+:[0-9]+)")?;
         let addr = re.captures(url).unwrap().get(1).unwrap().as_str();
@@ -85,7 +85,7 @@ fn parse_tracker_url(url: &str) -> Result<(Protocol, String)> {
         return Ok((Protocol::HTTP, url.to_owned()));
     }
 
-    Err(format!("Failure parsing tracker url {}", url).into())
+    anyhow::bail!("Failure parsing tracker url {}", url);
 }
 
 fn full_announce_list(metadata: &metadata::Metadata) -> Vec<String> {

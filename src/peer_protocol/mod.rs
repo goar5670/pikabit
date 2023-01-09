@@ -1,7 +1,8 @@
 // todo: add uTP (bep 29) | priority: low
 // todo: implement block pipelining (from bep 3) | priority: low
 
-use log::{error, info, warn};
+use anyhow;
+use log::{info, warn};
 use std::sync::Arc;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -10,7 +11,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::{bitfield::*, error};
+use crate::{bitfield::*, error::expect_eq};
 use peer::{Peer, PeerId};
 
 use msg::{Message, RelayedMessage};
@@ -25,14 +26,10 @@ pub async fn spawn_prch(
     mut peer: Peer,
     client_tx: Sender<RelayedMessage>,
     handshake_payload: [u8; 68],
-) -> Result<(Arc<PeerId>, Sender<Message>, JoinHandle<()>), String> {
+) -> anyhow::Result<(Arc<PeerId>, Sender<Message>, JoinHandle<()>)> {
     let mut stream = peer.connect().await?;
 
-    let peer_id = Arc::new(
-        handshake(&handshake_payload, &mut stream)
-            .await
-            .map_err(|e| format!("{:?}", e))?,
-    );
+    let peer_id = Arc::new(handshake(&handshake_payload, &mut stream).await?);
     peer.id = Some(peer_id.clone());
 
     let (read_half, write_half) = stream.into_split();
@@ -51,36 +48,32 @@ pub async fn spawn_prch(
     Ok((peer_id, msg_tx, join_handle))
 }
 
-fn verify_handshake(received: &[u8], sent: &[u8]) -> Result<[u8; 20], &'static str> {
-    if received[..20] != sent[..20] {
-        error!(
-            "Incorrect protocol name: {}",
-            String::from_utf8(received[..20].to_vec()).unwrap()
-        );
-        return Err("Incorrect protocol name");
-    } else if received[28..48] != sent[28..48] {
-        error!(
-            "Incorrect info hash: {:?}, expected: {:?}",
-            &received[28..48],
-            &sent[28..48]
-        );
-        return Err("Incorrect info hash");
-    }
+fn verify_handshake(received: &[u8], sent: &[u8]) -> anyhow::Result<[u8; 20]> {
+    expect_eq(
+        &received[..20],
+        &sent[..20],
+        "verify_handshake protocol name",
+    )?;
+    expect_eq(
+        &received[28..48],
+        &sent[28..48],
+        "verify_handshake info hash",
+    )?;
 
     if received[20..28] != sent[20..28] {
         warn!("Different protocol extension: {:?}", &received[20..28]);
     }
 
-    Ok(received[received.len() - 20..].try_into().unwrap())
+    Ok(received[received.len() - 20..].try_into()?)
 }
 
-async fn handshake(payload: &[u8; 68], stream: &mut TcpStream) -> error::Result<PeerId> {
+async fn handshake(payload: &[u8; 68], stream: &mut TcpStream) -> anyhow::Result<PeerId> {
     stream.write(payload).await?;
 
     let mut buf = [0u8; 68];
     stream.read_exact(&mut buf).await?;
 
-    let peer_id = verify_handshake(&buf, payload).unwrap();
+    let peer_id = verify_handshake(&buf, payload)?;
     Ok(PeerId::from(&peer_id))
 }
 

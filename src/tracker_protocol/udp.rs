@@ -1,3 +1,4 @@
+use anyhow;
 use byteorder::{BigEndian, ByteOrder};
 use log::{error, info};
 use rand::Rng;
@@ -13,7 +14,7 @@ use tokio::{
 use crate::{
     common::addr_from_buf,
     conc::{self, SharedMut},
-    error::{self, Result},
+    error,
 };
 
 const PROTOCOL_ID: u64 = 4497486125440;
@@ -33,12 +34,12 @@ impl UdpTracker {
         Self { addr, socket, rx }
     }
 
-    async fn send_recv(&mut self, buf: &[u8]) -> Result<Vec<u8>> {
+    async fn send_recv(&mut self, buf: &[u8]) -> anyhow::Result<Vec<u8>> {
         let _ = conc::timeout(5, self.socket.lock().await.send_to(&buf, &self.addr)).await?;
         conc::timeout(5, self.rx.recv()).await
     }
 
-    async fn connect(&mut self) -> Result<u64> {
+    async fn connect(&mut self) -> anyhow::Result<u64> {
         let mut buf = vec![];
         let tid = rand::thread_rng().gen();
 
@@ -63,7 +64,7 @@ impl UdpTracker {
         info_hash: &Arc<[u8; 20]>,
         peer_id: &Arc<[u8; 20]>,
         port: u16,
-    ) -> Result<Vec<u8>> {
+    ) -> anyhow::Result<Vec<u8>> {
         let tid = rand::thread_rng().gen();
         let mut buf = vec![];
         let _ = buf.write_u64(cid).await;
@@ -98,7 +99,7 @@ impl UdpTracker {
         info_hash: &Arc<[u8; 20]>,
         peer_id: &Arc<[u8; 20]>,
         port: u16,
-    ) -> Result<Vec<SocketAddr>> {
+    ) -> anyhow::Result<Vec<SocketAddr>> {
         let cid = self.connect().await?;
         Ok(
             super::parse_peers(&self.announce(cid, info_hash, peer_id, port).await?)

@@ -60,13 +60,10 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub async fn connect(&self) -> Result<TcpStream, String> {
+    pub async fn connect(&self) -> anyhow::Result<TcpStream> {
         match timeout(timeouts::PEER_CONNECTION, TcpStream::connect(&self.addr)).await {
-            Ok(r) => r.map_err(|e| format!("{e:?}")),
-            Err(_) => Err(format!(
-                "connection timed out, {:?}",
-                timeouts::PEER_CONNECTION
-            )),
+            Ok(r) => r.map_err(|e| e.into()),
+            Err(e) => Err(e.into()),
         }
     }
 }
