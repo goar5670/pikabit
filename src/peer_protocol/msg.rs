@@ -1,15 +1,15 @@
-use byteorder::{BigEndian, ByteOrder};
-use log::{info, trace, warn};
-use std::{io, net::SocketAddr};
+use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
+use log::{info, warn, error};
+use std::net::SocketAddr;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
     net::tcp,
+    io::{AsyncReadExt, AsyncWriteExt},
     sync::mpsc::{self, Receiver, Sender},
     task::JoinHandle,
     time::{self, Duration},
 };
 
-use crate::constants::msg_ids;
+use crate::{constants::msg, error::expect_eq};
 use crate::error::Result;
 use crate::peer_protocol::peer::Peer;
 
@@ -27,39 +27,79 @@ pub enum Message {
     Request(u32, u32, u32),
     Piece(u32, u32, Vec<u8>),
     Cancel(u32, u32, u32),
-    Empty,
 }
 
 impl Message {
-    pub async fn send(self, write_half: &mut tcp::OwnedWriteHalf) {
+    pub fn serialize(self) -> Result<Vec<u8>> {
         let (length, msg_id, payload) = match self {
             Message::Request(index, begin, length) => {
                 let mut buf: Vec<u8> = vec![];
-                buf.write_u32(index).await.unwrap();
-                buf.write_u32(begin).await.unwrap();
-                buf.write_u32(length).await.unwrap();
+                WriteBytesExt::write_u32::<BigEndian>(&mut buf, index)?;
+                WriteBytesExt::write_u32::<BigEndian>(&mut buf, begin)?;
+                WriteBytesExt::write_u32::<BigEndian>(&mut buf, length)?;
 
-                (13, Some(msg_ids::REQUEST), Some(buf))
+                (msg::len::REQUEST, Some(msg::id::REQUEST), Some(buf))
             }
-            Message::Interested => (1, Some(msg_ids::INTERESTED), None),
+            Message::Interested => (msg::len::INTERESTED, Some(msg::id::INTERESTED), None),
             Message::KeepAlive => (0, None, None),
             _ => (0, None, None),
         };
-
         let mut buf: Vec<u8> = vec![];
-        buf.write_u32(length).await.unwrap();
-        if !msg_id.is_none() && length != 0 {
-            debug_assert!(msg_id.unwrap() > msg_ids::CHOKE && msg_id.unwrap() <= msg_ids::CANCEL);
-            buf.push(msg_id.unwrap());
+        WriteBytesExt::write_u32::<BigEndian>(&mut buf, length)?;
+        if let Some(id) = msg_id && length != 0 {
+            buf.push(id);
 
             if let Some(mut p) = payload {
-                debug_assert_eq!(p.len() as u32, length - 1);
                 buf.append(&mut p);
             }
         }
 
-        let _ = write_half.write(&buf).await;
+        Ok(buf)
     }
+
+    pub fn deserialize(buf: &[u8]) -> Result<Self> {
+        let msg_id = buf[4];
+
+        let msg = match msg_id {
+            msg::id::CHOKE => Self::Choke,
+            msg::id::UNCHOKE => Self::Unchoke,
+            msg::id::HAVE => Self::Have(BigEndian::read_u32(&buf[5..])),
+            msg::id::BITFIELD => Self::Bitfield(buf[5..].to_vec()),
+            msg::id::PIECE => Self::Piece(
+                BigEndian::read_u32(&buf[5..9]),
+                BigEndian::read_u32(&buf[9..13]),
+                buf[13..].to_vec(),
+            ),
+            msg::id::CANCEL => Self::Cancel(
+                BigEndian::read_u32(&buf[5..9]),
+                BigEndian::read_u32(&buf[9..13]),
+                BigEndian::read_u32(&buf[13..]),
+            ),
+            _ => Self::KeepAlive,
+        };
+        
+        Ok(msg)
+    }
+}
+
+pub async fn recv_msg(read_half: &mut tcp::OwnedReadHalf) -> Result<Vec<u8>> {
+    let mut buf: Vec<u8> = vec![0; 4];
+
+    let n = read_half.read_exact(&mut buf).await?;
+    expect_eq(n, buf.len(), "recv_msg reading length")?;
+
+    let length = BigEndian::read_u32(&buf) as usize;
+
+    if length == 0 {
+        return Ok(buf);
+    }
+    
+    buf.resize(4 + length, 0);
+
+    let n = read_half.read_exact(&mut buf[4..]).await?;
+    expect_eq(n, buf.len() - 4, "recv_msg reading rest")?;
+
+    Ok(buf)
 }
 
 pub fn spawn_rh(
@@ -69,53 +109,23 @@ pub fn spawn_rh(
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            let n = match recv_len(&mut read_half).await {
+            let buf = match recv_msg(&mut read_half).await {
+                Ok(msg) => msg,
                 Err(e) => {
-                    warn!("recv_len error {:?}", e);
+                    warn!("recv_msg error {:?}", e);
                     break;
-                }
-                Ok(0) => continue,
-                Ok(n) => n,
+                },
             };
 
-            let mut buf: Vec<u8> = vec![0; n as usize];
-            if let Err(e) = recv(&mut read_half, &mut buf).await {
-                warn!("recv (len: {}) error {:?}", n, e);
-                break;
-            }
-
-            let msg_id = buf[0];
-            if msg_id != msg_ids::PIECE {
-                info!("received msg id: {}, {:?} from {:?}", msg_id, &buf, peer.id);
-            } else {
-                trace!(
-                    "received block: {} {}, from {:?}",
-                    BigEndian::read_u32(&buf[1..5]),
-                    BigEndian::read_u32(&buf[5..9]),
-                    peer.id,
-                );
-            }
-
-            // todo: deserialize
-            let msg = match msg_id {
-                msg_ids::CHOKE => Message::Choke,
-                msg_ids::UNCHOKE => Message::Unchoke,
-                msg_ids::HAVE => Message::Have(BigEndian::read_u32(&buf[1..])),
-                msg_ids::BITFIELD => Message::Bitfield(buf[1..].to_vec()),
-                msg_ids::PIECE => Message::Piece(
-                    BigEndian::read_u32(&buf[1..5]),
-                    BigEndian::read_u32(&buf[5..9]),
-                    buf[9..].to_vec(),
-                ),
-                msg_ids::CANCEL => Message::Cancel(
-                    BigEndian::read_u32(&buf[1..5]),
-                    BigEndian::read_u32(&buf[5..9]),
-                    BigEndian::read_u32(&buf[9..]),
-                ),
-                _ => Message::Empty,
+            let msg = match Message::deserialize(&buf) {
+                Ok(msg) => msg,
+                Err(e) => {
+                    error!("message deserialize error {:?}", e);
+                    break;
+                },
             };
 
-            if msg != Message::Empty {
+            if msg != Message::KeepAlive {
                 let _ = client_tx.send((peer.addr, msg)).await;
             }
         }
@@ -123,37 +133,25 @@ pub fn spawn_rh(
     })
 }
 
-async fn recv_len(read_half: &mut tcp::OwnedReadHalf) -> io::Result<u32> {
-    let mut buf = [0u8; 4];
-    let _ = read_half.read_exact(&mut buf).await?;
-
-    Ok(BigEndian::read_u32(&buf))
-}
-
-async fn recv(read_half: &mut tcp::OwnedReadHalf, buf: &mut [u8]) -> Result<usize> {
-    let res = read_half.read_exact(buf).await;
-
-    match res {
-        Err(e) => Err(e.into()),
-        Ok(n) if n != buf.len() => Err(format!(
-            "Unexpected length, read {} bytes, expected {}",
-            n,
-            buf.len()
-        )
-        .into()),
-        Ok(n) => Ok(n),
-    }
-}
-
 pub fn spawn_sh(mut write_half: tcp::OwnedWriteHalf) -> (Sender<Message>, JoinHandle<()>) {
     let (tx, mut rx): (Sender<Message>, Receiver<Message>) = mpsc::channel(40);
     let join_handle = tokio::spawn(async move {
         loop {
-            match time::timeout(Duration::from_secs(2 * 60), rx.recv()).await {
-                Ok(Some(msg)) => msg.send(&mut write_half).await,
+            let msg = match time::timeout(Duration::from_secs(2 * 60), rx.recv()).await {
+                Ok(Some(msg)) => msg,
                 Ok(None) => break,
-                Err(_) => Message::KeepAlive.send(&mut write_half).await,
-            }
+                Err(_) => Message::KeepAlive,
+            };
+
+            let buf = match msg.serialize() {
+                Ok(b) => b,
+                Err(e) => {
+                    error!("error serializing message: {:?}", e);
+                    continue;
+                },
+            };
+            // todo: handle errors on write
+            let _ = write_half.write(&buf).await;
         }
         info!("exiting sh task");
     });
