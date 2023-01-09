@@ -62,6 +62,12 @@ pub trait IntoResult<T> {
     fn into_res(self) -> anyhow::Result<T>;
 }
 
+impl<T> IntoResult<Option<T>> for Option<T> {
+    fn into_res(self) -> anyhow::Result<Option<T>> {
+        Ok(self)
+    }
+}
+
 impl<T> IntoResult<T> for Option<T> {
     fn into_res(self) -> anyhow::Result<T> {
         self.ok_or(anyhow::anyhow!("None value"))

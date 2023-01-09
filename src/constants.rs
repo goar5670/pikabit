@@ -25,9 +25,8 @@ pub mod msg {
 }
 
 pub mod timeouts {
-    use tokio::time::Duration;
-
-    pub const PEER_CONNECTION: Duration = Duration::from_secs(60);
+    pub const PEER_CONNECTION: u64 = 60;
+    pub const KEEP_ALIVE: u64 = 2 * 60;
 }
 
 pub const REQUESTS_CAPACITY: u32 = 5;

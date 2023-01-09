@@ -1,8 +1,9 @@
 use rand::{distributions::Alphanumeric, Rng};
 use std::{cmp, fmt::Debug, net::SocketAddr, sync::Arc};
-use tokio::{net::TcpStream, time::timeout};
+use tokio::net::TcpStream;
 
 use crate::common;
+use crate::conc;
 use crate::constants::{timeouts, CLIENT_PREFIX, CLIENT_VERSION};
 
 #[derive(PartialEq, Eq, Hash)]
@@ -61,10 +62,7 @@ pub struct Peer {
 
 impl Peer {
     pub async fn connect(&self) -> anyhow::Result<TcpStream> {
-        match timeout(timeouts::PEER_CONNECTION, TcpStream::connect(&self.addr)).await {
-            Ok(r) => r.map_err(|e| e.into()),
-            Err(e) => Err(e.into()),
-        }
+        conc::timeout(timeouts::PEER_CONNECTION, TcpStream::connect(&self.addr)).await
     }
 }
 

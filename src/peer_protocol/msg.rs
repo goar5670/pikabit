@@ -7,11 +7,10 @@ use tokio::{
     net::tcp,
     sync::mpsc::{self, Receiver, Sender},
     task::JoinHandle,
-    time::{self, Duration},
 };
 
-use crate::peer_protocol::peer::Peer;
-use crate::{constants::msg, error::expect_eq};
+use crate::{peer_protocol::peer::Peer, constants::timeouts};
+use crate::{constants::msg, error::expect_eq, conc};
 
 pub type RelayedMessage = (SocketAddr, Message);
 
@@ -137,7 +136,7 @@ pub fn spawn_sh(mut write_half: tcp::OwnedWriteHalf) -> (Sender<Message>, JoinHa
     let (tx, mut rx): (Sender<Message>, Receiver<Message>) = mpsc::channel(40);
     let join_handle = tokio::spawn(async move {
         loop {
-            let msg = match time::timeout(Duration::from_secs(2 * 60), rx.recv()).await {
+            let msg = match conc::timeout(timeouts::KEEP_ALIVE, rx.recv()).await {
                 Ok(Some(msg)) => msg,
                 Ok(None) => break,
                 Err(_) => Message::KeepAlive,
