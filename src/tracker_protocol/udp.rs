@@ -51,8 +51,8 @@ impl UdpTracker {
         let action = BigEndian::read_u32(&res[..4]);
         let receieved_tid = BigEndian::read_u32(&res[4..8]);
 
-        error::expect_eq(action, ACTION_CONNECT)?;
-        error::expect_eq(receieved_tid, tid)?;
+        error::expect_eq(action, ACTION_CONNECT, "connect action")?;
+        error::expect_eq(receieved_tid, tid, "connect tid")?;
 
         Ok(BigEndian::read_u64(&res[8..]))
     }
@@ -85,10 +85,10 @@ impl UdpTracker {
         let res = self.send_recv(&buf).await?;
 
         let action = BigEndian::read_u32(&res[..4]);
-        error::expect_eq(action, ACTION_ANNOUNCE)?;
+        error::expect_eq(action, ACTION_ANNOUNCE, "announce action")?;
 
         let received_tid = BigEndian::read_u32(&res[4..8]);
-        error::expect_eq(received_tid, tid)?;
+        error::expect_eq(received_tid, tid, "announce tid")?;
 
         Ok(res[20..].to_vec())
     }
