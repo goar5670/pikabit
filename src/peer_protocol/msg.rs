@@ -9,8 +9,8 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::{peer_protocol::peer::Peer, constants::timeouts};
-use crate::{constants::msg, error::expect_eq, conc};
+use crate::{conc, constants::msg, error::expect_eq};
+use crate::{constants::timeouts, peer_protocol::peer::Peer};
 
 pub type RelayedMessage = (SocketAddr, Message);
 
@@ -38,6 +38,17 @@ impl Message {
                 WriteBytesExt::write_u32::<BigEndian>(&mut buf, length)?;
 
                 (msg::len::REQUEST, Some(msg::id::REQUEST), Some(buf))
+            }
+            Message::Piece(index, begin, mut block) => {
+                let mut buf: Vec<u8> = vec![];
+                WriteBytesExt::write_u32::<BigEndian>(&mut buf, index)?;
+                WriteBytesExt::write_u32::<BigEndian>(&mut buf, begin)?;
+                buf.append(&mut block);
+                (
+                    msg::len::PIECE_PREAMBLE + block.len() as u32,
+                    Some(msg::id::PIECE),
+                    Some(buf),
+                )
             }
             Message::Interested => (msg::len::INTERESTED, Some(msg::id::INTERESTED), None),
             Message::KeepAlive => (0, None, None),
@@ -70,6 +81,11 @@ impl Message {
                 buf[13..].to_vec(),
             ),
             msg::id::CANCEL => Self::Cancel(
+                BigEndian::read_u32(&buf[5..9]),
+                BigEndian::read_u32(&buf[9..13]),
+                BigEndian::read_u32(&buf[13..]),
+            ),
+            msg::id::REQUEST => Self::Request(
                 BigEndian::read_u32(&buf[5..9]),
                 BigEndian::read_u32(&buf[9..13]),
                 BigEndian::read_u32(&buf[13..]),

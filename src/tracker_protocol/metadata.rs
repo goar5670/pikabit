@@ -1,5 +1,3 @@
-// todo: potentially move this to tracker_protocol | priority: med
-
 use serde_bencode;
 use serde_bytes::ByteBuf;
 use serde_derive::{Deserialize, Serialize};

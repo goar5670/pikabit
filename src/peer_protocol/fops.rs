@@ -2,7 +2,7 @@ use futures::future::join_all;
 use std::cmp;
 use tokio::{
     fs::{File, OpenOptions},
-    io::{AsyncSeekExt, AsyncWriteExt, SeekFrom},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom},
 };
 
 use crate::tracker_protocol::metadata::Info;
@@ -88,6 +88,19 @@ impl FileManager {
         let _ = file.write_all(bytes).await;
     }
 
+    async fn read_from_file(
+        &mut self,
+        file_index: usize,
+        relative_offset: u64,
+        length: u32,
+    ) -> Vec<u8> {
+        let file = &mut self.files.get_mut(file_index).unwrap().inner;
+        file.seek(SeekFrom::Start(relative_offset)).await.unwrap();
+        let mut buf: Vec<u8> = vec![0; length as usize];
+        let _ = file.read_exact(&mut buf).await;
+        buf
+    }
+
     pub async fn write_piece(&mut self, offset: u64, bytes: &Vec<u8>) {
         let piece_length = bytes.len() as u32;
         let mut bytes_written = 0;
@@ -103,9 +116,19 @@ impl FileManager {
             cur_offset = 0;
         }
     }
-}
 
-#[derive(Debug)]
-pub enum Cmd {
-    WritePiece(u64, Vec<u8>),
+    pub async fn read_block(&mut self, offset: u64, length: u32) -> Vec<u8> {
+        let (mut cur_file_index, mut cur_offset) = self.get_relative_offset(offset);
+        let mut bytes_read = 0;
+        let mut buf = vec![0; length as usize];
+        while bytes_read < length {
+            let l = self.get_length_to_add(cur_file_index, cur_offset, length - bytes_read);
+            let mut bytes = self.read_from_file(cur_file_index, cur_offset, l).await;
+            buf.append(&mut bytes);
+            bytes_read += l;
+            cur_file_index += 1;
+            cur_offset = 0;
+        }
+        buf
+    }
 }

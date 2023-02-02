@@ -19,7 +19,7 @@ pub mod msg {
         pub const HAVE: u32 = 5;
         pub const BITFIELD_PREAMBLE: u32 = 1;
         pub const REQUEST: u32 = 13;
-        pub const PIECE_PREABLE: u32 = 9;
+        pub const PIECE_PREAMBLE: u32 = 9;
         pub const CANCEL: u32 = 13;
     }
 }

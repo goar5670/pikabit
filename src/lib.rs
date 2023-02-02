@@ -11,6 +11,6 @@ pub mod peer_protocol;
 pub mod stats;
 pub mod tracker_protocol;
 
-// todo: add crate-level checks for correctnes | priority: med
+// todo: add crate-level checks for correctness | priority: med
 // todo: implement error handling | priority: med
 // todo: add crate-level doc | priority: low

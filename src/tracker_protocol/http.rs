@@ -4,7 +4,7 @@ use serde_bencode;
 use serde_bytes::ByteBuf;
 use serde_derive::*;
 use serde_qs as qs;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr};
 use urlencoding;
 
 use crate::common::addr_from_buf;

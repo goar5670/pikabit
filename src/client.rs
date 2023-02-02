@@ -167,6 +167,12 @@ impl Client {
                                 pc_tracker.get().await.metadata.num_pieces()
                             );
                         }
+                        // todo: test sending requests
+                        Message::Request(index, begin, length) => {
+                            let offset = pc_tracker.get().await.metadata.piece_offset(index) + begin as u64;
+                            let buf = fman.read_block(offset, length).await;
+                            let _ = pr_tracker.msg_tx.send(Message::Piece(index, begin, buf)).await;
+                        },
                         Message::Choke => pr_tracker.state.am_choked = true,
                         Message::Unchoke => {
                             if pr_tracker.state.am_choked {
