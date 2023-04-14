@@ -1,5 +1,6 @@
+use crossterm::{cursor, terminal, ExecutableCommand};
 use std::{
-    io::{stdout, Write},
+    io::{stdout, Stdout, Write},
     time::SystemTime,
 };
 
@@ -36,7 +37,7 @@ impl Speed {
     }
 
     fn format(&self) -> String {
-        format!("{:.2} {}   ", self.value, self.unit.format())
+        format!("{:.2} {}", self.value, self.unit.format())
     }
 }
 
@@ -46,6 +47,9 @@ pub struct StatsTracker {
     latent: u64,
     total: u64,
     last_printed: SystemTime,
+    piece_availability: f32,
+    num_peers: u32,
+    stdout: Stdout,
 }
 
 impl StatsTracker {
@@ -55,6 +59,9 @@ impl StatsTracker {
             latent: 0,
             total,
             last_printed: SystemTime::now(),
+            piece_availability: 0.0,
+            num_peers: 0,
+            stdout: stdout(),
         }
     }
 
@@ -78,12 +85,19 @@ impl StatsTracker {
         bar
     }
 
-    pub fn update(&mut self, piece_length: u32) {
+    pub fn update_downloaded(&mut self, piece_length: u32) {
         self.latent += piece_length as u64;
     }
 
+    pub fn update_availablity(&mut self, availability: f32) {
+        self.piece_availability = availability;
+    }
+
+    pub fn update_peers(&mut self, peers: u32) {
+        self.num_peers = peers;
+    }
+
     pub fn print(&mut self) {
-        let mut stdout = stdout();
         let speed =
             Speed::new((self.latent as f64) / (self.last_printed.elapsed().unwrap().as_secs_f64()));
 
@@ -99,7 +113,25 @@ impl StatsTracker {
         );
         let progress = ((self.downloaded as f64 / self.total as f64) * 100.0).floor() as u8;
 
-        print!("\r{} {}", Self::format_progress(progress), speed.format());
-        stdout.flush().unwrap();
+        self.stdout
+            .execute(terminal::Clear(terminal::ClearType::FromCursorDown))
+            .unwrap();
+
+        // todo: handle errors here
+        writeln!(
+            self.stdout,
+            "\n{} {}",
+            Self::format_progress(progress),
+            speed.format()
+        )
+        .unwrap();
+        writeln!(
+            self.stdout,
+            "Availability: {:.4}\t Peers: {}",
+            self.piece_availability, self.num_peers
+        )
+        .unwrap();
+        self.stdout.execute(cursor::MoveUp(3)).unwrap();
+        self.stdout.flush().unwrap();
     }
 }

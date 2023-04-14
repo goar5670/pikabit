@@ -103,7 +103,7 @@ impl Client {
             stats_tracker
                 .lock()
                 .await
-                .update(lock.metadata.piece_len(piece_index));
+                .update_downloaded(lock.metadata.piece_len(piece_index));
         }
     }
 
@@ -150,11 +150,13 @@ impl Client {
                                 pc_tracker.get_mut().await.update_single(piece_index);
                             }
                             pr_tracker.have.set(piece_index, true);
+                            stats_tracker.lock().await.update_availablity(pc_tracker.get().await.availability());
                         }
                         Message::Bitfield(buf) => {
                             if !pr_tracker.state.am_choked && pr_tracker.state.am_interested {
                                 pc_tracker.get_mut().await.update_multiple(&buf);
                             }
+                            stats_tracker.lock().await.update_availablity(pc_tracker.get().await.availability());
                             pr_tracker.have = BitfieldRef::new(
                                 &buf,
                                 pc_tracker.get().await.metadata.num_pieces(),
@@ -204,6 +206,7 @@ impl Client {
     async fn handle_tracker_com(&self, peer_tx: Sender<RelayedMessage>) -> JoinHandle<()> {
         let (tracker_tx, mut tracker_rx) = mpsc::channel(40);
 
+        let stats_tracker = self.stats_tracker.clone();
         let pc_tracker = self.pc_tracker.clone();
         let pr_map = self.pr_map.clone();
         let peers = SharedMut::new(HashSet::<Arc<PeerId>>::new());
@@ -222,6 +225,7 @@ impl Client {
         tokio::spawn(async move {
             let mut pch_handles = vec![];
             while let Some(addr) = tracker_rx.recv().await {
+                let stats_tracker_clone = stats_tracker.clone();
                 let pr_map_clone = pr_map.clone();
                 let pc_tracker_clone = pc_tracker.clone();
                 let tx_clone = peer_tx.clone();
@@ -256,6 +260,10 @@ impl Client {
                         .get_mut()
                         .await
                         .insert(addr, pr_tracker.clone());
+                    stats_tracker_clone
+                        .lock()
+                        .await
+                        .update_peers(pr_map_clone.get().await.len() as u32);
 
                     let reqs_handle =
                         requests::spawn_reqh(pc_tracker_clone, pr_tracker, REQUESTS_CAPACITY).await;

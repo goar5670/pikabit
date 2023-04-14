@@ -125,6 +125,7 @@ impl PieceInfo {
 pub struct PieceTracker {
     pub metadata: Metadata,
     pub needed: HashSet<u32>,
+    available: Vec<u8>,
     have: BitfieldOwned,
     requested: BitfieldOwned,
     buffered: HashMap<u32, PieceInfo>,
@@ -136,6 +137,7 @@ impl PieceTracker {
         Self {
             have: BitfieldOwned::new(metadata.num_pieces()),
             requested: BitfieldOwned::new(metadata.num_pieces()),
+            available: vec![0; metadata.num_pieces() as usize],
             metadata,
             needed: HashSet::new(),
             buffered: HashMap::new(),
@@ -148,6 +150,7 @@ impl PieceTracker {
         {
             self.needed.insert(piece_index);
         }
+        self.available[piece_index as usize] += 1;
     }
 
     pub fn update_multiple(&mut self, buf: &[u8]) {
@@ -158,10 +161,6 @@ impl PieceTracker {
                 self.update_single(i);
             }
         }
-    }
-
-    pub fn rem(&self) -> u32 {
-        self.have.rem()
     }
 
     pub fn on_block_buffered(
@@ -192,18 +191,6 @@ impl PieceTracker {
         }
     }
 
-    pub fn reserve_piece(&mut self, piece_index: u32) {
-        self.requested.set(piece_index, true);
-    }
-
-    pub fn unreserve_piece(&mut self, piece_index: u32) {
-        self.requested.set(piece_index, false);
-    }
-
-    pub fn is_reserved(&self, piece_index: u32) -> Option<bool> {
-        self.requested.get(piece_index)
-    }
-
     pub fn ordered_piece(&self, piece_index: u32, pbuf: &PieceBuffer) -> Vec<u8> {
         let piece = pbuf.get(piece_index);
         let mut ordered: Vec<u8> = vec![];
@@ -229,6 +216,33 @@ impl PieceTracker {
         }
 
         ordered
+    }
+
+    pub fn availability(&self) -> f32 {
+        let &min_availability = self.available.iter().min().unwrap();
+        let cnt = self
+            .available
+            .iter()
+            .filter(|&&a| a >= min_availability + 1)
+            .count() as u32;
+
+        return (min_availability as f32) + (cnt as f32 / self.metadata.num_pieces() as f32);
+    }
+
+    pub fn reserve_piece(&mut self, piece_index: u32) {
+        self.requested.set(piece_index, true);
+    }
+
+    pub fn unreserve_piece(&mut self, piece_index: u32) {
+        self.requested.set(piece_index, false);
+    }
+
+    pub fn is_reserved(&self, piece_index: u32) -> Option<bool> {
+        self.requested.get(piece_index)
+    }
+
+    pub fn rem(&self) -> u32 {
+        self.have.rem()
     }
 
     pub fn verify_piece_hash(&self, piece_index: u32, hash: &[u8; 20]) -> bool {
