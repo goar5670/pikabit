@@ -34,7 +34,7 @@ enum Tracker {
 }
 
 impl Tracker {
-    fn new_udp(addr: SocketAddr, socket: SharedMut<UdpSocket>, rx: Receiver<Vec<u8>>) -> Self {
+    fn new_udp(addr: SocketAddr, socket: Arc<UdpSocket>, rx: Receiver<Vec<u8>>) -> Self {
         Self::Udp(UdpTracker::new(addr, socket, rx))
     }
 
@@ -109,7 +109,7 @@ pub async fn spawn_tch(
     client_tx: Sender<SocketAddr>,
 ) -> JoinHandle<()> {
     let info_hash = Arc::new(metadata.info.hash());
-    let socket = SharedMut::new(UdpSocket::bind(format!("0.0.0.0:{port}")).await.unwrap());
+    let socket = Arc::new(UdpSocket::bind(format!("0.0.0.0:{port}")).await.unwrap());
 
     let peers_map: SharedMut<HashSet<SocketAddr>> = SharedMut::new(HashSet::new());
 

@@ -11,11 +11,7 @@ use tokio::{
     time::{self, Duration},
 };
 
-use crate::{
-    common::addr_from_buf,
-    conc::{self, SharedMut},
-    error,
-};
+use crate::{common::addr_from_buf, conc, error};
 
 const PROTOCOL_ID: u64 = 4497486125440;
 
@@ -25,17 +21,17 @@ const ACTION_ANNOUNCE: u32 = 1;
 #[derive(Debug)]
 pub struct UdpTracker {
     pub addr: SocketAddr,
-    socket: SharedMut<UdpSocket>,
+    socket: Arc<UdpSocket>,
     rx: Receiver<Vec<u8>>,
 }
 
 impl UdpTracker {
-    pub fn new(addr: SocketAddr, socket: SharedMut<UdpSocket>, rx: Receiver<Vec<u8>>) -> Self {
+    pub fn new(addr: SocketAddr, socket: Arc<UdpSocket>, rx: Receiver<Vec<u8>>) -> Self {
         Self { addr, socket, rx }
     }
 
     async fn send_recv(&mut self, buf: &[u8]) -> anyhow::Result<Vec<u8>> {
-        let _ = conc::timeout(5, self.socket.lock().await.send_to(&buf, &self.addr)).await?;
+        let _ = conc::timeout(5, self.socket.send_to(&buf, &self.addr)).await?;
         conc::timeout(5, self.rx.recv()).await
     }
 
@@ -112,12 +108,12 @@ impl UdpTracker {
 
 pub fn spawn_udp_rh(
     tracker_map: HashMap<SocketAddr, Sender<Vec<u8>>>,
-    socket: SharedMut<UdpSocket>,
+    socket: Arc<UdpSocket>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut buf = [0u8; 512];
         loop {
-            let res = socket.lock().await.try_recv_from(&mut buf);
+            let res = socket.try_recv_from(&mut buf);
             match res {
                 Ok((n, addr)) => {
                     if let Some(tx) = tracker_map.get(&addr) {
